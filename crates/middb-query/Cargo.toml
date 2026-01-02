@@ -1,0 +1,10 @@
+[package]
+name = "middb-query"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+middb-core = { path = "../middb-core" }

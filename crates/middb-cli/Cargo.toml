@@ -1,0 +1,16 @@
+[package]
+name = "middb-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+middb-core = { path = "../middb-core" }
+middb-network = { path = "../middb-network" }
+middb-query = { path = "../middb-query" }
+tokio.workspace = true
+clap = { version = "4.5", features = ["derive"] }
+rustyline = "14.0"
+anyhow = "1.0"
