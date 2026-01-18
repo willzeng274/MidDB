@@ -27,6 +27,13 @@ impl Planner {
                     predicate,
                 }
             }
+            LogicalPlan::Project { input, columns } => {
+                let child = self.to_physical(*input);
+                PhysicalPlan::Project {
+                    input: Box::new(child),
+                    columns,
+                }
+            }
         }
     }
 }

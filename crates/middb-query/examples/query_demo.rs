@@ -1,63 +1,89 @@
-use middb_query::{BinaryOperator, Expr, LogicalPlan, Planner, Value};
+use middb_query::{BinaryOperator, Executor, Expr, Planner, Row, Table, Value};
 
 fn main() {
     println!("Query Engine Demo\n");
     
+    let mut executor = Executor::new();
+    
+    let mut products = Table::new("products".to_string());
+    products.add_row(Row::new_with_values(vec![
+        ("id".to_string(), Value::Int(1)),
+        ("name".to_string(), Value::String("Laptop".to_string())),
+        ("price".to_string(), Value::Int(1200)),
+    ]));
+    products.add_row(Row::new_with_values(vec![
+        ("id".to_string(), Value::Int(2)),
+        ("name".to_string(), Value::String("Mouse".to_string())),
+        ("price".to_string(), Value::Int(25)),
+    ]));
+    products.add_row(Row::new_with_values(vec![
+        ("id".to_string(), Value::Int(3)),
+        ("name".to_string(), Value::String("Keyboard".to_string())),
+        ("price".to_string(), Value::Int(75)),
+    ]));
+    products.add_row(Row::new_with_values(vec![
+        ("id".to_string(), Value::Int(4)),
+        ("name".to_string(), Value::String("Monitor".to_string())),
+        ("price".to_string(), Value::Int(300)),
+    ]));
+    
+    executor.register_table("products".to_string(), products);
+    
+    println!("Registered 'products' table with 4 rows\n");
+    
     let planner = Planner::new();
     
-    println!("Creating simple scan plan:");
-    let scan = planner.plan("users".to_string(), None);
-    println!("{:?}\n", scan);
-    
-    println!("Creating scan with filter:");
+    println!("Query: SELECT * FROM products WHERE price > 100");
     let filter = Expr::BinaryOp {
-        op: BinaryOperator::Eq,
-        left: Box::new(Expr::Column("age".to_string())),
-        right: Box::new(Expr::Literal(Value::Int(25))),
+        op: BinaryOperator::Gt,
+        left: Box::new(Expr::Column("price".to_string())),
+        right: Box::new(Expr::Literal(Value::Int(100))),
     };
     
-    let filtered_scan = planner.plan("users".to_string(), Some(filter.clone()));
-    println!("{:?}\n", filtered_scan);
+    let logical = planner.plan("products".to_string(), Some(filter));
+    let physical = planner.to_physical(logical);
     
-    println!("Converting to physical plan:");
-    let physical = planner.to_physical(filtered_scan);
-    println!("{:?}\n", physical);
+    match executor.execute(physical) {
+        Ok(rows) => {
+            println!("Results: {} rows\n", rows.len());
+            for row in &rows {
+                if let (Some(name), Some(price)) = (row.get_column("name"), row.get_column("price")) {
+                    println!("  {} - ${:?}", name.as_string().unwrap(), price.as_int().unwrap());
+                }
+            }
+        }
+        Err(e) => println!("Error: {}", e),
+    }
     
-    println!("Creating nested filter plan:");
-    let nested = LogicalPlan::Filter {
-        input: Box::new(LogicalPlan::Scan {
-            table: "products".to_string(),
-            filter: None,
-        }),
-        predicate: Expr::BinaryOp {
-            op: BinaryOperator::Gt,
-            left: Box::new(Expr::Column("price".to_string())),
-            right: Box::new(Expr::Literal(Value::Int(100))),
-        },
-    };
-    
-    println!("Logical plan:");
-    println!("{:?}\n", nested);
-    
-    let physical_nested = planner.to_physical(nested);
-    println!("Physical plan:");
-    println!("{:?}\n", physical_nested);
-    
-    println!("Expression evaluation example:");
-    let expr = Expr::BinaryOp {
+    println!("\nQuery: SELECT * FROM products WHERE price >= 50 AND price <= 100");
+    let range_filter = Expr::BinaryOp {
         op: BinaryOperator::And,
         left: Box::new(Expr::BinaryOp {
-            op: BinaryOperator::Gt,
-            left: Box::new(Expr::Column("age".to_string())),
-            right: Box::new(Expr::Literal(Value::Int(18))),
+            op: BinaryOperator::Ge,
+            left: Box::new(Expr::Column("price".to_string())),
+            right: Box::new(Expr::Literal(Value::Int(50))),
         }),
         right: Box::new(Expr::BinaryOp {
-            op: BinaryOperator::Lt,
-            left: Box::new(Expr::Column("age".to_string())),
-            right: Box::new(Expr::Literal(Value::Int(65))),
+            op: BinaryOperator::Le,
+            left: Box::new(Expr::Column("price".to_string())),
+            right: Box::new(Expr::Literal(Value::Int(100))),
         }),
     };
     
-    println!("{}", expr);
-    println!("\nQuery engine components demonstrated");
+    let logical = planner.plan("products".to_string(), Some(range_filter));
+    let physical = planner.to_physical(logical);
+    
+    match executor.execute(physical) {
+        Ok(rows) => {
+            println!("Results: {} rows\n", rows.len());
+            for row in &rows {
+                if let (Some(name), Some(price)) = (row.get_column("name"), row.get_column("price")) {
+                    println!("  {} - ${:?}", name.as_string().unwrap(), price.as_int().unwrap());
+                }
+            }
+        }
+        Err(e) => println!("Error: {}", e),
+    }
+    
+    println!("\nQuery engine with execution complete");
 }

@@ -10,6 +10,10 @@ pub enum LogicalPlan {
         input: Box<LogicalPlan>,
         predicate: Expr,
     },
+    Project {
+        input: Box<LogicalPlan>,
+        columns: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -21,5 +25,9 @@ pub enum PhysicalPlan {
     Filter {
         input: Box<PhysicalPlan>,
         predicate: Expr,
+    },
+    Project {
+        input: Box<PhysicalPlan>,
+        columns: Vec<String>,
     },
 }

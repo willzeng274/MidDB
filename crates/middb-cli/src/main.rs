@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use middb_core::{Config, Database};
 use middb_network::{Client, Server};
+use middb_query::{BinaryOperator, Executor, Expr, Planner, Row, Table, Value};
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use std::path::PathBuf;
@@ -33,6 +34,11 @@ enum Commands {
         #[arg(short, long, default_value = "./data")]
         data_dir: PathBuf,
     },
+    
+    Query {
+        #[arg(short, long, default_value = "./data")]
+        data_dir: PathBuf,
+    },
 }
 
 #[tokio::main]
@@ -48,6 +54,9 @@ async fn main() -> Result<()> {
         }
         Commands::Local { data_dir } => {
             run_local(data_dir)
+        }
+        Commands::Query { data_dir } => {
+            run_query(data_dir)
         }
     }
 }
@@ -290,6 +299,160 @@ fn handle_local_command(db: &Database, line: &str) -> Result<()> {
             println!("MemTable entries: {}", stats.memtable_entries);
             println!("SSTables: {}", stats.num_sstables);
             println!("Sequence: {}", stats.sequence_number);
+        }
+        
+        _ => {
+            anyhow::bail!("Unknown command: {}", parts[0]);
+        }
+    }
+    
+    Ok(())
+}
+
+fn run_query(_data_dir: PathBuf) -> Result<()> {
+    println!("Query mode (in-memory tables for demonstration)\n");
+    
+    let mut executor = Executor::new();
+    
+    let mut users = Table::new("users".to_string());
+    users.add_row(Row::new_with_values(vec![
+        ("id".to_string(), Value::Int(1)),
+        ("name".to_string(), Value::String("Alice".to_string())),
+        ("age".to_string(), Value::Int(30)),
+    ]));
+    users.add_row(Row::new_with_values(vec![
+        ("id".to_string(), Value::Int(2)),
+        ("name".to_string(), Value::String("Bob".to_string())),
+        ("age".to_string(), Value::Int(25)),
+    ]));
+    users.add_row(Row::new_with_values(vec![
+        ("id".to_string(), Value::Int(3)),
+        ("name".to_string(), Value::String("Charlie".to_string())),
+        ("age".to_string(), Value::Int(35)),
+    ]));
+    
+    executor.register_table("users".to_string(), users);
+    
+    println!("Registered table 'users' with 3 rows\n");
+    
+    let mut rl = DefaultEditor::new()?;
+    
+    println!("Query REPL");
+    println!("Commands: scan <table>, filter <table> <column> <op> <value>, quit");
+    println!("Example: filter users age > 25\n");
+    
+    let planner = Planner::new();
+    
+    loop {
+        let readline = rl.readline("query> ");
+        
+        match readline {
+            Ok(line) => {
+                let line = line.trim();
+                
+                if line.is_empty() {
+                    continue;
+                }
+                
+                rl.add_history_entry(line)?;
+                
+                if line == "quit" || line == "exit" {
+                    break;
+                }
+                
+                if let Err(e) = handle_query_command(&executor, &planner, line) {
+                    eprintln!("Error: {}", e);
+                }
+            }
+            Err(ReadlineError::Interrupted) => {
+                println!("Interrupted");
+                break;
+            }
+            Err(ReadlineError::Eof) => {
+                break;
+            }
+            Err(err) => {
+                eprintln!("Error: {}", err);
+                break;
+            }
+        }
+    }
+    
+    println!("Goodbye");
+    Ok(())
+}
+
+fn handle_query_command(executor: &Executor, planner: &Planner, line: &str) -> Result<()> {
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    
+    if parts.is_empty() {
+        return Ok(());
+    }
+    
+    match parts[0] {
+        "scan" => {
+            if parts.len() != 2 {
+                anyhow::bail!("Usage: scan <table>");
+            }
+            
+            let logical = planner.plan(parts[1].to_string(), None);
+            let physical = planner.to_physical(logical);
+            
+            match executor.execute(physical) {
+                Ok(rows) => {
+                    println!("{} rows", rows.len());
+                    for row in rows {
+                        println!("{:?}", row);
+                    }
+                }
+                Err(e) => anyhow::bail!("Query error: {}", e),
+            }
+        }
+        
+        "filter" => {
+            if parts.len() < 5 {
+                anyhow::bail!("Usage: filter <table> <column> <op> <value>");
+            }
+            
+            let table = parts[1];
+            let column = parts[2];
+            let op_str = parts[3];
+            let value_str = parts[4];
+            
+            let op = match op_str {
+                "=" | "==" => BinaryOperator::Eq,
+                "!=" => BinaryOperator::Ne,
+                "<" => BinaryOperator::Lt,
+                "<=" => BinaryOperator::Le,
+                ">" => BinaryOperator::Gt,
+                ">=" => BinaryOperator::Ge,
+                _ => anyhow::bail!("Unknown operator: {}", op_str),
+            };
+            
+            let value = if let Ok(i) = value_str.parse::<i64>() {
+                Value::Int(i)
+            } else {
+                Value::String(value_str.to_string())
+            };
+            
+            let filter = Expr::BinaryOp {
+                op,
+                left: Box::new(Expr::Column(column.to_string())),
+                right: Box::new(Expr::Literal(value)),
+            };
+            
+            let logical = planner.plan(table.to_string(), Some(filter));
+            let physical = planner.to_physical(logical);
+            
+            match executor.execute(physical) {
+                Ok(rows) => {
+                    println!("{} rows", rows.len());
+                    for row in rows {
+                        println!("{:?}", row);
+                    }
+                }
+                Err(e) => anyhow::bail!("Query error: {}", e),
+            }
         }
         
         _ => {

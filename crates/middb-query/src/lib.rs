@@ -9,4 +9,4 @@ mod tests;
 pub use expr::{Expr, Value, BinaryOperator};
 pub use plan::{LogicalPlan, PhysicalPlan};
 pub use planner::Planner;
-pub use executor::{Executor, Row};
+pub use executor::{Executor, Row, Table};
