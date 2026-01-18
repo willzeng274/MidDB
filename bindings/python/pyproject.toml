@@ -11,3 +11,7 @@ classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: 3",
 ]
+
+[tool.maturin]
+module-name = "middb.middb_python"
+python-source = "python"

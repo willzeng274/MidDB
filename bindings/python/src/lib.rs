@@ -3,10 +3,11 @@ use pyo3::exceptions::{PyIOError, PyRuntimeError};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[pyclass]
 struct Database {
-    db: Option<CoreDatabase>,
+    db: Option<Arc<CoreDatabase>>,
 }
 
 #[pymethods]
@@ -17,7 +18,7 @@ impl Database {
         let db = CoreDatabase::open(config)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to open database: {}", e)))?;
         
-        Ok(Database { db: Some(db) })
+        Ok(Database { db: Some(Arc::new(db)) })
     }
     
     fn put(&self, key: &[u8], value: &[u8]) -> PyResult<()> {
@@ -49,8 +50,10 @@ impl Database {
     
     fn close(&mut self) -> PyResult<()> {
         if let Some(db) = self.db.take() {
-            db.close()
-                .map_err(|e| PyIOError::new_err(format!("Close failed: {}", e)))?;
+            if let Ok(db_owned) = Arc::try_unwrap(db) {
+                db_owned.close()
+                    .map_err(|e| PyIOError::new_err(format!("Close failed: {}", e)))?;
+            }
         }
         Ok(())
     }
@@ -92,7 +95,7 @@ struct DatabaseStats {
 }
 
 #[pymodule]
-fn middb(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn middb_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Database>()?;
     m.add_class::<DatabaseStats>()?;
     Ok(())

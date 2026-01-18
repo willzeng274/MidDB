@@ -1,2 +1,14 @@
 target/
 .DS_Store
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg-info/
+dist/
+build/
+.pytest_cache/
