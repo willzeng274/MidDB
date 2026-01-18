@@ -23,3 +23,5 @@ pub use memtable::{MemTable, ValueEntry};
 pub use skiplist::SkipList;
 pub use bptree::BPTree;
 pub use db::{Database, DatabaseStats};
+pub use catalog::{Catalog, CatalogError, CatalogResult, Column, DataType, TableSchema, TableSchemaBuilder};
+pub use transaction::{Transaction, TransactionManager, TxnError, TxnId, TxnStatus, Version, WriteOp};

@@ -528,6 +528,7 @@ dependencies = [
  "crossbeam",
  "parking_lot",
  "proptest",
+ "serde",
  "tempfile",
 ]
 
