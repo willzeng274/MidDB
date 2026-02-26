@@ -13,3 +13,4 @@ crate-type = ["cdylib"]
 [dependencies]
 pyo3 = { version = "0.22", features = ["extension-module"] }
 middb-core = { path = "../../crates/middb-core" }
+middb-query = { path = "../../crates/middb-query" }

@@ -139,7 +139,9 @@ impl Database {
             let mut wal = self.wal.write().unwrap();
             let entry = WalEntry::put(seq, key.clone(), value.clone());
             wal.append(&entry)?;
-            wal.sync()?;
+            if self.config.sync_writes {
+                wal.sync()?;
+            }
         }
 
         {
@@ -188,7 +190,9 @@ impl Database {
             let mut wal = self.wal.write().unwrap();
             let entry = WalEntry::delete(seq, key.clone());
             wal.append(&entry)?;
-            wal.sync()?;
+            if self.config.sync_writes {
+                wal.sync()?;
+            }
         }
 
         {
@@ -287,6 +291,19 @@ impl Database {
             sequence_number: self.sequence.load(Ordering::SeqCst),
             l0_file_count: version.l0_file_count(),
         }
+    }
+
+    pub fn scan(&self, start: &Key, end: &Key) -> Vec<(Key, Value)> {
+        let memtable = self.memtable.read().unwrap();
+        let mut results = Vec::new();
+
+        for (k, entry) in memtable.range(start, end) {
+            if let crate::memtable::ValueEntry::Value(v) = entry {
+                results.push((k.clone(), v.clone()));
+            }
+        }
+
+        results
     }
 
     pub fn close(self) -> Result<()> {

@@ -1,6 +1,7 @@
 use super::block::{Block, BlockIterator};
 use super::footer::{BlockHandle, Footer, FOOTER_SIZE};
 use crate::bloom::BloomFilter;
+use crate::compression;
 use crate::{Error, Result};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -81,13 +82,14 @@ impl SSTableReader {
     
     fn read_block(&self, handle: &BlockHandle) -> Result<Block> {
         let mut file = self.file.as_ref();
-        
+
         file.seek(SeekFrom::Start(handle.offset))?;
-        
+
         let mut data = vec![0u8; handle.size as usize];
         file.read_exact(&mut data)?;
-        
-        Block::decode(&data)
+
+        let decompressed = compression::decompress(&data)?;
+        Block::decode(&decompressed)
     }
     
     pub fn footer(&self) -> &Footer {

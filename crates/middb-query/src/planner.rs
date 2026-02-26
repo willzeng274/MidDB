@@ -1,40 +1,37 @@
 use crate::expr::Expr;
+use crate::optimizer::CostBasedOptimizer;
+use crate::parser::SqlParser;
 use crate::plan::{LogicalPlan, PhysicalPlan};
 
-pub struct Planner;
+pub struct Planner {
+    optimizer: CostBasedOptimizer,
+}
 
 impl Planner {
     pub fn new() -> Self {
-        Planner
+        Planner {
+            optimizer: CostBasedOptimizer::new(),
+        }
     }
-    
+
+    pub fn with_optimizer(optimizer: CostBasedOptimizer) -> Self {
+        Planner { optimizer }
+    }
+
     pub fn plan(&self, scan_table: String, filter: Option<Expr>) -> LogicalPlan {
         LogicalPlan::Scan {
             table: scan_table,
             filter,
         }
     }
-    
+
+    pub fn plan_sql(&self, sql: &str) -> Result<PhysicalPlan, String> {
+        let logical = SqlParser::parse(sql)?;
+        Ok(self.optimizer.optimize(logical))
+    }
+
     pub fn to_physical(&self, logical: LogicalPlan) -> PhysicalPlan {
-        match logical {
-            LogicalPlan::Scan { table, filter } => {
-                PhysicalPlan::SeqScan { table, filter }
-            }
-            LogicalPlan::Filter { input, predicate } => {
-                let child = self.to_physical(*input);
-                PhysicalPlan::Filter {
-                    input: Box::new(child),
-                    predicate,
-                }
-            }
-            LogicalPlan::Project { input, columns } => {
-                let child = self.to_physical(*input);
-                PhysicalPlan::Project {
-                    input: Box::new(child),
-                    columns,
-                }
-            }
-        }
+        self.optimizer.optimize(logical)
     }
 }
 

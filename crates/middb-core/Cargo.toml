@@ -10,12 +10,31 @@ repository.workspace = true
 parking_lot.workspace = true
 crossbeam.workspace = true
 serde.workspace = true
+lz4_flex.workspace = true
+snap.workspace = true
 
 [dev-dependencies]
 proptest = "1.5"
 criterion = "0.5"
 tempfile = "3.0"
+hdrhistogram.workspace = true
 
 [[bench]]
 name = "skiplist"
+harness = false
+
+[[bench]]
+name = "core_benchmarks"
+harness = false
+
+[[bench]]
+name = "bptree_benchmarks"
+harness = false
+
+[[bench]]
+name = "compression_benchmarks"
+harness = false
+
+[[bench]]
+name = "ycsb"
 harness = false

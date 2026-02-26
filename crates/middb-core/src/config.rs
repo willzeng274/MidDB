@@ -1,3 +1,4 @@
+use crate::compression::CompressionType;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,9 +23,11 @@ pub struct Config {
     pub bloom_bits_per_key: usize,
     pub block_size: usize,
     pub use_compression: bool,
+    pub compression_type: CompressionType,
     pub level0_file_num_compaction_trigger: usize,
     pub max_bytes_for_level_base: u64,
     pub max_bytes_for_level_multiplier: u64,
+    pub sync_writes: bool,
 }
 
 impl Default for Config {
@@ -38,9 +41,11 @@ impl Default for Config {
             bloom_bits_per_key: 10,
             block_size: 64 * 1024,
             use_compression: false,
+            compression_type: CompressionType::None,
             level0_file_num_compaction_trigger: 4,
             max_bytes_for_level_base: 10 * 1024 * 1024,
             max_bytes_for_level_multiplier: 10,
+            sync_writes: true,
         }
     }
 }

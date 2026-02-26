@@ -1,3 +1,4 @@
+use crate::compression::CompressionType;
 use crate::{Error, Result};
 
 const SSTABLE_MAGIC: u64 = 0x5354414254414244;
@@ -40,6 +41,7 @@ pub struct Footer {
     pub index_handle: BlockHandle,
     pub bloom_handle: BlockHandle,
     pub version: u32,
+    pub compression: CompressionType,
 }
 
 impl Footer {
@@ -48,20 +50,35 @@ impl Footer {
             index_handle,
             bloom_handle,
             version: FOOTER_VERSION,
+            compression: CompressionType::None,
         }
     }
-    
+
+    pub fn with_compression(
+        index_handle: BlockHandle,
+        bloom_handle: BlockHandle,
+        compression: CompressionType,
+    ) -> Self {
+        Footer {
+            index_handle,
+            bloom_handle,
+            version: FOOTER_VERSION,
+            compression,
+        }
+    }
+
     pub fn encode(&self) -> [u8; FOOTER_SIZE] {
         let mut bytes = [0u8; FOOTER_SIZE];
-        
+
         bytes[0..16].copy_from_slice(&self.index_handle.encode());
         bytes[16..32].copy_from_slice(&self.bloom_handle.encode());
         bytes[32..36].copy_from_slice(&self.version.to_le_bytes());
+        bytes[36] = self.compression as u8;
         bytes[40..48].copy_from_slice(&SSTABLE_MAGIC.to_le_bytes());
-        
+
         bytes
     }
-    
+
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         if bytes.len() != FOOTER_SIZE {
             return Err(Error::Corruption(format!(
@@ -70,7 +87,7 @@ impl Footer {
                 bytes.len()
             )));
         }
-        
+
         let magic = u64::from_le_bytes(bytes[40..48].try_into().unwrap());
         if magic != SSTABLE_MAGIC {
             return Err(Error::Corruption(format!(
@@ -78,10 +95,10 @@ impl Footer {
                 SSTABLE_MAGIC, magic
             )));
         }
-        
+
         let index_handle = BlockHandle::decode(&bytes[0..16])?;
         let bloom_handle = BlockHandle::decode(&bytes[16..32])?;
-        
+
         let version = u32::from_le_bytes(bytes[32..36].try_into().unwrap());
         if version != FOOTER_VERSION {
             return Err(Error::Corruption(format!(
@@ -89,11 +106,14 @@ impl Footer {
                 version
             )));
         }
-        
+
+        let compression = CompressionType::from_u8(bytes[36])?;
+
         Ok(Footer {
             index_handle,
             bloom_handle,
             version,
+            compression,
         })
     }
 }

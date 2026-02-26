@@ -5,6 +5,7 @@ use crate::{Error, Result, SequenceNumber};
 pub enum EntryType {
     Put = 1,
     Delete = 2,
+    BTreePageWrite = 3,
 }
 
 impl EntryType {
@@ -12,6 +13,7 @@ impl EntryType {
         match value {
             1 => Ok(EntryType::Put),
             2 => Ok(EntryType::Delete),
+            3 => Ok(EntryType::BTreePageWrite),
             _ => Err(Error::Corruption(format!("Invalid entry type: {}", value))),
         }
     }
@@ -41,6 +43,15 @@ impl WalEntry {
             entry_type: EntryType::Delete,
             key,
             value: None,
+        }
+    }
+
+    pub fn btree_page_write(sequence_number: SequenceNumber, page_id: u32, page_data: Vec<u8>) -> Self {
+        WalEntry {
+            sequence_number,
+            entry_type: EntryType::BTreePageWrite,
+            key: page_id.to_le_bytes().to_vec(),
+            value: Some(page_data),
         }
     }
     
