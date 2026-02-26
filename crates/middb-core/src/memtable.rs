@@ -1,5 +1,5 @@
-use crate::skiplist::SkipList;
 use crate::{Result, sstable::SSTableWriter};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -18,19 +18,19 @@ impl<V: Default> Default for ValueEntry<V> {
 }
 
 pub struct MemTable<K, V> {
-    data: SkipList<K, ValueEntry<V>>,
+    data: BTreeMap<K, ValueEntry<V>>,
     approx_size: AtomicUsize,
     flush_threshold: usize,
 }
 
-impl<K: Ord + Default, V: Default> MemTable<K, V> {
+impl<K: Ord, V> MemTable<K, V> {
     pub fn new() -> Self {
         Self::with_threshold(64 * 1024 * 1024)
     }
 
     pub fn with_threshold(flush_threshold: usize) -> Self {
         MemTable {
-            data: SkipList::new(),
+            data: BTreeMap::new(),
             approx_size: AtomicUsize::new(0),
             flush_threshold,
         }
@@ -63,10 +63,19 @@ impl<K: Ord + Default, V: Default> MemTable<K, V> {
     {
         let key_size = key.as_ref().len();
         let value_size = value.as_ref().len();
-        let entry_size = key_size + value_size + NODE_OVERHEAD;
+        let new_entry_size = key_size + value_size + NODE_OVERHEAD;
+
+        // Subtract old entry size if overwriting
+        if let Some(old_entry) = self.data.get(&key) {
+            let old_size = key_size + NODE_OVERHEAD + match old_entry {
+                ValueEntry::Value(v) => v.as_ref().len(),
+                ValueEntry::Tombstone => 0,
+            };
+            self.approx_size.fetch_sub(old_size, Ordering::Relaxed);
+        }
 
         self.data.insert(key, ValueEntry::Value(value));
-        self.approx_size.fetch_add(entry_size, Ordering::Relaxed);
+        self.approx_size.fetch_add(new_entry_size, Ordering::Relaxed);
 
         Ok(())
     }
@@ -82,12 +91,22 @@ impl<K: Ord + Default, V: Default> MemTable<K, V> {
     pub fn delete(&mut self, key: K) -> std::result::Result<(), String>
     where
         K: AsRef<[u8]>,
+        V: AsRef<[u8]>,
     {
         let key_size = key.as_ref().len();
-        let entry_size = key_size + NODE_OVERHEAD;
+        let new_entry_size = key_size + NODE_OVERHEAD;
+
+        // Subtract old entry size if overwriting
+        if let Some(old_entry) = self.data.get(&key) {
+            let old_size = key_size + NODE_OVERHEAD + match old_entry {
+                ValueEntry::Value(v) => v.as_ref().len(),
+                ValueEntry::Tombstone => 0,
+            };
+            self.approx_size.fetch_sub(old_size, Ordering::Relaxed);
+        }
 
         self.data.insert(key, ValueEntry::Tombstone);
-        self.approx_size.fetch_add(entry_size, Ordering::Relaxed);
+        self.approx_size.fetch_add(new_entry_size, Ordering::Relaxed);
 
         Ok(())
     }
@@ -97,14 +116,14 @@ impl<K: Ord + Default, V: Default> MemTable<K, V> {
     }
 
     pub fn range<'a>(&'a self, start: &K, end: &'a K) -> impl Iterator<Item = (&'a K, &'a ValueEntry<V>)> {
-        self.data.range(start, end)
+        self.data.range(start..end)
     }
 
     pub fn clear(&mut self) {
-        self.data = SkipList::new();
+        self.data.clear();
         self.approx_size.store(0, Ordering::Relaxed);
     }
-    
+
     pub fn flush_to_sstable<P: AsRef<Path>>(
         &self,
         path: P,
@@ -117,26 +136,30 @@ impl<K: Ord + Default, V: Default> MemTable<K, V> {
         V: AsRef<[u8]>,
     {
         let mut writer = SSTableWriter::create(path, block_size)?;
-        
+
         for (key, entry) in self.iter() {
             let key_bytes: &[u8] = (*key).as_ref();
             match entry {
                 ValueEntry::Value(value) => {
                     let value_bytes: &[u8] = (*value).as_ref();
-                    writer.add(key_bytes, value_bytes)?;
+                    // Prefix with 0x01 to distinguish from tombstones
+                    let mut tagged = Vec::with_capacity(1 + value_bytes.len());
+                    tagged.push(0x01);
+                    tagged.extend_from_slice(value_bytes);
+                    writer.add(key_bytes, &tagged)?;
                 }
                 ValueEntry::Tombstone => {
-                    let tombstone_marker = b"\x00TOMBSTONE";
-                    writer.add(key_bytes, tombstone_marker)?;
+                    // Single byte 0x02 = tombstone
+                    writer.add(key_bytes, &[0x02])?;
                 }
             }
         }
-        
+
         writer.finish(file_id, level)
     }
 }
 
-impl<K: Ord + Default, V: Default> Default for MemTable<K, V> {
+impl<K: Ord, V> Default for MemTable<K, V> {
     fn default() -> Self {
         Self::new()
     }

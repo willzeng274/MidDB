@@ -2,11 +2,15 @@ mod node;
 mod leaf;
 mod interior;
 mod iter;
+pub mod page;
+pub mod buffer_pool;
+pub mod disk;
 
 pub use node::{Node, NodePtr, NodeWeakPtr};
 pub use leaf::LeafNode;
 pub use interior::InteriorNode;
 pub use iter::{BPTreeIter, RangeIter};
+pub use disk::DiskBPTree;
 
 use std::sync::Arc;
 

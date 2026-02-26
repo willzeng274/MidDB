@@ -1,0 +1,80 @@
+Repository structure
+
+```
+middb/
+├── Cargo.toml
+├── README.md
+├── LICENSE
+├── ARCHITECTURE.md
+├── CONTRIBUTING.md
+│
+├── crates/
+│   ├── middb-core/ # Core storage engine
+│   │   ├── Cargo.toml
+│   │   ├── src/
+│   │   │   ├── lib.rs
+│   │   │   ├── error.rs
+│   │   │   ├── types.rs
+│   │   │   ├── config.rs
+│   │   │   ├── storage/
+│   │   │   │   ├── mod.rs
+│   │   │   │   ├── *.rs
+│   │   │   │   ├── lsm/
+│   │   │   │   │   └── *.rs
+│   │   │   │   ├── btree/
+│   │   │   │   │   └── *.rs
+│   │   │   │   └── columnar/
+│   │   │   │       └── *.rs
+│   │   │   ├── transaction/
+│   │   │   │   └── *.rs
+│   │   │   └── catalog/
+│   │   │       └── *.rs
+│   │   ├── benches/
+│   │   │   └── *.rs
+│   │   └── tests/
+│   │       └── *.rs
+│   │
+│   ├── middb-query/ # Query engine
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │   │   ├── lib.rs
+│   │   │   └── ...
+│   │
+│   ├── middb-network/ # Network layer
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │   │   ├── lib.rs
+│   │   │   └── ...
+│   │
+│   └── middb-cli/ # Command-line interface
+│       ├── Cargo.toml
+│       ├── src/
+│       │   └── easy_stuff.rs
+│
+├── bindings/
+│   └── python/ # Python bindings
+│       ├── Cargo.toml
+│       ├── pyproject.toml
+│       ├── src/
+│       │   └── *.rs
+│       ├── middb/
+│       │   └── *.py
+│       ├── tests/
+│       │   └── *.py
+│       └── examples/
+│           └── *.py
+│
+├── examples/
+│   └── *.rs
+│
+├── docs/
+│   ├── architecture/
+│   │   └── *.md
+│   ├── user_guide/
+│   │   └── *.md
+│   └── development/
+│       └── *.md
+│
+└── scripts/
+    └── *.sh
+```

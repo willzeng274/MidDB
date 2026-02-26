@@ -1,7 +1,7 @@
 use crate::{Key, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::RwLock;
+use parking_lot::{Mutex, RwLock};
 
 pub type TxnId = u64;
 pub type Version = u64;
@@ -73,7 +73,7 @@ struct CommittedWrite {
 pub struct TransactionManager {
     next_txn_id: AtomicU64,
     current_version: AtomicU64,
-    active_txns: RwLock<HashMap<TxnId, Transaction>>,
+    active_txns: RwLock<HashMap<TxnId, Mutex<Transaction>>>,
     committed_versions: RwLock<HashMap<Key, Vec<CommittedWrite>>>,
 }
 
@@ -88,20 +88,19 @@ impl TransactionManager {
     }
 
     pub fn begin(&self) -> TxnId {
+        // Atomic: assign txn_id + snapshot version + insert into active under one lock
+        let mut active = self.active_txns.write();
         let txn_id = self.next_txn_id.fetch_add(1, Ordering::SeqCst);
         let start_version = self.current_version.load(Ordering::SeqCst);
-
         let txn = Transaction::new(txn_id, start_version);
-
-        let mut active = self.active_txns.write().unwrap();
-        active.insert(txn_id, txn);
-
+        active.insert(txn_id, Mutex::new(txn));
         txn_id
     }
 
     pub fn record_read(&self, txn_id: TxnId, key: Key) -> Result<(), TxnError> {
-        let mut active = self.active_txns.write().unwrap();
-        let txn = active.get_mut(&txn_id).ok_or(TxnError::TxnNotFound(txn_id))?;
+        let active = self.active_txns.read(); // read lock — concurrent txns don't block
+        let txn_mutex = active.get(&txn_id).ok_or(TxnError::TxnNotFound(txn_id))?;
+        let mut txn = txn_mutex.lock(); // per-txn mutex
 
         if !txn.is_active() {
             return Err(TxnError::TxnNotActive(txn_id));
@@ -112,8 +111,9 @@ impl TransactionManager {
     }
 
     pub fn record_write(&self, txn_id: TxnId, key: Key, value: Option<Value>) -> Result<(), TxnError> {
-        let mut active = self.active_txns.write().unwrap();
-        let txn = active.get_mut(&txn_id).ok_or(TxnError::TxnNotFound(txn_id))?;
+        let active = self.active_txns.read(); // read lock — concurrent txns don't block
+        let txn_mutex = active.get(&txn_id).ok_or(TxnError::TxnNotFound(txn_id))?;
+        let mut txn = txn_mutex.lock(); // per-txn mutex
 
         if !txn.is_active() {
             return Err(TxnError::TxnNotActive(txn_id));
@@ -127,35 +127,62 @@ impl TransactionManager {
     }
 
     pub fn get_local(&self, txn_id: TxnId, key: &Key) -> Result<Option<WriteOp>, TxnError> {
-        let active = self.active_txns.read().unwrap();
-        let txn = active.get(&txn_id).ok_or(TxnError::TxnNotFound(txn_id))?;
+        let active = self.active_txns.read();
+        let txn_mutex = active.get(&txn_id).ok_or(TxnError::TxnNotFound(txn_id))?;
+        let txn = txn_mutex.lock();
         Ok(txn.get_local(key).cloned())
     }
 
     pub fn get_start_version(&self, txn_id: TxnId) -> Result<Version, TxnError> {
-        let active = self.active_txns.read().unwrap();
-        let txn = active.get(&txn_id).ok_or(TxnError::TxnNotFound(txn_id))?;
+        let active = self.active_txns.read();
+        let txn_mutex = active.get(&txn_id).ok_or(TxnError::TxnNotFound(txn_id))?;
+        let txn = txn_mutex.lock();
         Ok(txn.start_version)
     }
 
     pub fn commit(&self, txn_id: TxnId) -> Result<(Version, Vec<(Key, WriteOp)>), TxnError> {
-        let txn = {
-            let mut active = self.active_txns.write().unwrap();
-            active.remove(&txn_id).ok_or(TxnError::TxnNotFound(txn_id))?
-        };
+        // Hold active_txns write lock through the entire commit critical section:
+        // conflict check → version bump → record committed → remove from active
+        // Lock order: active_txns before committed_versions (always)
+        let mut active = self.active_txns.write();
+        let txn_mutex = active.remove(&txn_id).ok_or(TxnError::TxnNotFound(txn_id))?;
+        let txn = txn_mutex.into_inner();
 
         if !txn.is_active() {
             return Err(TxnError::TxnNotActive(txn_id));
         }
 
-        self.check_conflicts(&txn)?;
+        // Conflict check while holding active_txns lock — prevents two txns
+        // from both passing the check on the same key
+        {
+            let committed = self.committed_versions.read();
+            for key in &txn.read_set {
+                if let Some(versions) = committed.get(key) {
+                    for write in versions {
+                        if write.version > txn.start_version {
+                            // Re-insert txn so it can be aborted later
+                            return Err(TxnError::Conflict(key.clone()));
+                        }
+                    }
+                }
+            }
+            for key in txn.write_set.keys() {
+                if let Some(versions) = committed.get(key) {
+                    for write in versions {
+                        if write.version > txn.start_version {
+                            return Err(TxnError::Conflict(key.clone()));
+                        }
+                    }
+                }
+            }
+        }
 
         let commit_version = self.current_version.fetch_add(1, Ordering::SeqCst) + 1;
 
         let writes: Vec<(Key, WriteOp)> = txn.write_set.into_iter().collect();
 
         {
-            let mut committed = self.committed_versions.write().unwrap();
+            let mut committed = self.committed_versions.write();
             for (key, op) in &writes {
                 let value = match op {
                     WriteOp::Put(v) => Some(v.clone()),
@@ -174,43 +201,20 @@ impl TransactionManager {
             }
         }
 
+        // active_txns lock is released here (txn already removed above)
+        drop(active);
+
         Ok((commit_version, writes))
     }
 
     pub fn abort(&self, txn_id: TxnId) -> Result<(), TxnError> {
-        let mut active = self.active_txns.write().unwrap();
+        let mut active = self.active_txns.write();
         active.remove(&txn_id).ok_or(TxnError::TxnNotFound(txn_id))?;
-        Ok(())
-    }
-
-    fn check_conflicts(&self, txn: &Transaction) -> Result<(), TxnError> {
-        let committed = self.committed_versions.read().unwrap();
-
-        for key in &txn.read_set {
-            if let Some(versions) = committed.get(key) {
-                for write in versions {
-                    if write.version > txn.start_version {
-                        return Err(TxnError::Conflict(key.clone()));
-                    }
-                }
-            }
-        }
-
-        for key in txn.write_set.keys() {
-            if let Some(versions) = committed.get(key) {
-                for write in versions {
-                    if write.version > txn.start_version {
-                        return Err(TxnError::Conflict(key.clone()));
-                    }
-                }
-            }
-        }
-
-        Ok(())
+        Ok(()) // Mutex<Transaction> is dropped here
     }
 
     pub fn get_visible_value(&self, key: &Key, start_version: Version) -> Option<Value> {
-        let committed = self.committed_versions.read().unwrap();
+        let committed = self.committed_versions.read();
 
         if let Some(versions) = committed.get(key) {
             let mut latest: Option<&CommittedWrite> = None;
@@ -232,7 +236,7 @@ impl TransactionManager {
     }
 
     pub fn active_count(&self) -> usize {
-        self.active_txns.read().unwrap().len()
+        self.active_txns.read().len()
     }
 
     pub fn current_version(&self) -> Version {
@@ -240,7 +244,7 @@ impl TransactionManager {
     }
 
     pub fn gc(&self, min_version: Version) {
-        let mut committed = self.committed_versions.write().unwrap();
+        let mut committed = self.committed_versions.write();
 
         for versions in committed.values_mut() {
             versions.retain(|w| w.version >= min_version);

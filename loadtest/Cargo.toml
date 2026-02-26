@@ -1,0 +1,20 @@
+[package]
+name = "middb-loadtest"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+middb-core = { path = "../crates/middb-core" }
+middb-query = { path = "../crates/middb-query" }
+middb-network = { path = "../crates/middb-network" }
+middb-cluster = { path = "../crates/middb-cluster" }
+tokio.workspace = true
+hdrhistogram.workspace = true
+tempfile = "3.0"
+
+[[bin]]
+name = "loadtest"
+path = "src/main.rs"

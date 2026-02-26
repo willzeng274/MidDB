@@ -3,8 +3,10 @@ members = [
 	"crates/middb-core",
 	"crates/middb-query",
 	"crates/middb-network",
+	"crates/middb-cluster",
 	"crates/middb-cli",
 	"bindings/python",
+	"loadtest",
 ]
 
 resolver = "2"
@@ -25,3 +27,8 @@ tracing = "0.1"
 parking_lot = "0.12"
 crossbeam = "0.8"
 dashmap = "6.1"
+lz4_flex = "0.11"
+snap = "1.1"
+sqlparser = "0.52"
+hdrhistogram = "7.5"
+criterion = "0.5"

@@ -1,6 +1,7 @@
 use super::block::{Block, BlockBuilder};
 use super::footer::{BlockHandle, Footer, SSTableMetadata, FOOTER_SIZE};
 use crate::bloom::BloomFilterBuilder;
+use crate::compression::{self, CompressionType};
 use crate::Result;
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
@@ -17,28 +18,38 @@ pub struct SSTableWriter {
     num_entries: u64,
     smallest_key: Option<Vec<u8>>,
     largest_key: Option<Vec<u8>>,
+    compression: CompressionType,
 }
 
 impl SSTableWriter {
     pub fn create<P: AsRef<Path>>(path: P, block_size: usize) -> Result<Self> {
-        Self::create_with_bloom_bits(path, block_size, 10)
+        Self::create_with_options(path, block_size, 10, CompressionType::None)
     }
-    
+
     pub fn create_with_bloom_bits<P: AsRef<Path>>(
         path: P,
         block_size: usize,
         bloom_bits_per_key: usize,
+    ) -> Result<Self> {
+        Self::create_with_options(path, block_size, bloom_bits_per_key, CompressionType::None)
+    }
+
+    pub fn create_with_options<P: AsRef<Path>>(
+        path: P,
+        block_size: usize,
+        bloom_bits_per_key: usize,
+        compression: CompressionType,
     ) -> Result<Self> {
         let file = OpenOptions::new()
             .create(true)
             .write(true)
             .truncate(true)
             .open(path)?;
-        
+
         Ok(SSTableWriter {
             file: BufWriter::new(file),
-            data_block_builder: BlockBuilder::new(16), // 16 restart points
-            index_block_builder: BlockBuilder::new(1), // 1 restart point per index entry
+            data_block_builder: BlockBuilder::new(16),
+            index_block_builder: BlockBuilder::new(1),
             bloom_builder: BloomFilterBuilder::new(bloom_bits_per_key),
             block_size,
             offset: 0,
@@ -46,6 +57,7 @@ impl SSTableWriter {
             num_entries: 0,
             smallest_key: None,
             largest_key: None,
+            compression,
         })
     }
     
@@ -90,9 +102,9 @@ impl SSTableWriter {
             BlockBuilder::new(1),
         );
         let index_block = index_block_builder.finish();
-        let index_handle = self.write_block(&index_block)?;
+        let index_handle = self.write_block_raw(&index_block)?;
         
-        let footer = Footer::new(index_handle, bloom_handle);
+        let footer = Footer::with_compression(index_handle, bloom_handle, self.compression);
         self.file.write_all(&footer.encode())?;
         self.offset += FOOTER_SIZE as u64;
         
@@ -128,13 +140,26 @@ impl SSTableWriter {
     }
     
     fn write_block(&mut self, block: &Block) -> Result<BlockHandle> {
+        self.write_block_with_compression(block, self.compression)
+    }
+
+    fn write_block_raw(&mut self, block: &Block) -> Result<BlockHandle> {
+        self.write_block_with_compression(block, CompressionType::None)
+    }
+
+    fn write_block_with_compression(
+        &mut self,
+        block: &Block,
+        compression: CompressionType,
+    ) -> Result<BlockHandle> {
         let encoded = block.encode();
+        let data = compression::compress(&encoded, compression);
         let offset = self.offset;
-        let size = encoded.len() as u64;
-        
-        self.file.write_all(&encoded)?;
+        let size = data.len() as u64;
+
+        self.file.write_all(&data)?;
         self.offset += size;
-        
+
         Ok(BlockHandle::new(offset, size))
     }
     

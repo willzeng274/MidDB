@@ -1,0 +1,17 @@
+[package]
+name = "middb-cluster"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+middb-core = { path = "../middb-core" }
+middb-network = { path = "../middb-network" }
+tokio.workspace = true
+serde.workspace = true
+bincode.workspace = true
+
+[dev-dependencies]
+tempfile = "3.0"
