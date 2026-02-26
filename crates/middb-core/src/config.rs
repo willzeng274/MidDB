@@ -28,6 +28,7 @@ pub struct Config {
     pub max_bytes_for_level_base: u64,
     pub max_bytes_for_level_multiplier: u64,
     pub sync_writes: bool,
+    pub block_cache_size: usize,
 }
 
 impl Default for Config {
@@ -46,6 +47,7 @@ impl Default for Config {
             max_bytes_for_level_base: 10 * 1024 * 1024,
             max_bytes_for_level_multiplier: 10,
             sync_writes: true,
+            block_cache_size: 64 * 1024 * 1024,
         }
     }
 }

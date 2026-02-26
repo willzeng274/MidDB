@@ -5,7 +5,8 @@ use middb_core::catalog::Catalog;
 use middb_core::Database;
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use parking_lot::RwLock;
+use std::sync::Arc;
 
 pub struct Executor {
     tables: HashMap<String, Table>,
@@ -219,7 +220,7 @@ impl Executor {
         filter: Option<Expr>,
     ) -> Result<Vec<Row>, String> {
         let catalog = self.catalog.as_ref().ok_or("No catalog available")?;
-        let catalog = catalog.read().map_err(|e| e.to_string())?;
+        let catalog = catalog.read();
         let schema = catalog
             .get_table(table_name)
             .ok_or_else(|| format!("Table not found: {}", table_name))?
@@ -436,7 +437,7 @@ impl Executor {
         let catalog = self.catalog.as_ref().ok_or("No catalog")?;
 
         let schema = {
-            let cat = catalog.read().map_err(|e| e.to_string())?;
+            let cat = catalog.read();
             cat.get_table(table_name)
                 .ok_or_else(|| format!("Table not found: {}", table_name))?
                 .clone()
@@ -492,7 +493,7 @@ impl Executor {
 
         let catalog = self.catalog.as_ref().ok_or("No catalog")?;
         let schema = {
-            let cat = catalog.read().map_err(|e| e.to_string())?;
+            let cat = catalog.read();
             cat.get_table(table_name)
                 .ok_or_else(|| format!("Table not found: {}", table_name))?
                 .clone()
@@ -537,7 +538,7 @@ impl Executor {
 
         let catalog = self.catalog.as_ref().ok_or("No catalog")?;
         let schema = {
-            let cat = catalog.read().map_err(|e| e.to_string())?;
+            let cat = catalog.read();
             cat.get_table(table_name)
                 .ok_or_else(|| format!("Table not found: {}", table_name))?
                 .clone()
@@ -569,7 +570,7 @@ impl Executor {
         let catalog = self.catalog.as_ref().ok_or("No catalog")?;
 
         {
-            let cat = catalog.read().map_err(|e| e.to_string())?;
+            let cat = catalog.read();
             if cat.table_exists(table_name) {
                 if if_not_exists {
                     return Ok(vec![]);

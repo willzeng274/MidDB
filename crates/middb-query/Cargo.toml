@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 middb-core = { path = "../middb-core" }
 sqlparser.workspace = true
+parking_lot.workspace = true
 
 [dev-dependencies]
 tempfile = "3.0"

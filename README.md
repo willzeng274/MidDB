@@ -96,18 +96,19 @@ Txn Path:    begin → buffer writes → commit (conflict check) → apply
 ```
 
 Components:
-- MemTable: Skip list write buffer with tombstone support
-- SSTable: Immutable sorted files with block compression
+- MemTable: BTreeMap write buffer with tombstone support and accurate size tracking
+- SSTable: Immutable sorted files with LZ4/Snappy block compression
 - VersionSet: Level-organized SSTable management (L0 overlapping, L1+ sorted)
 - Compaction: Background L0→L1 merging when L0 has 4+ files
-- WAL: Append-only durability log with CRC checksums
-- Transactions: MVCC with snapshot isolation, read/write sets, conflict detection
+- WAL: Append-only durability log with CRC checksums, group commit for concurrent writers
+- Block Cache: 16-shard LRU cache for SSTable blocks
+- Transactions: MVCC with snapshot isolation, atomic begin/commit, conflict detection
 - Catalog: Table schemas with column types (Int64, String, Bytes, Bool)
 - Bloom: 10 bits/key, ~1% false positive rate
-- B+Tree: In-memory balanced tree indexes
+- B+Tree: In-memory + disk-persistent with buffer pool
 - Storage: Page abstraction (4KB pages)
-- Network: Async TCP server/client with bincode protocol
-- Query: Expression AST, logical/physical plans, type validation
+- Network: Async TCP server/client with bincode protocol, connection pooling
+- Query: SQL parser, cost-based optimizer, hash/sort-merge/nested loop joins
 
 ## Project Structure
 
@@ -147,21 +148,18 @@ cargo bench                   # Run benchmarks
 Completed:
 - LSM tree: MemTable, SSTable, WAL, bloom filters
 - Leveled compaction: VersionSet, L0→L1 merging, background worker
-- MVCC transactions: Snapshot isolation, conflict detection, atomic commits
+- MVCC transactions: Snapshot isolation, conflict detection, atomic begin/commit
 - Catalog: Table schemas, column types, query validation
-- B+Tree: In-memory with node splitting
+- B+Tree: In-memory with node splitting + disk-persistent B+Tree with buffer pool
 - Storage: File and memory backends
-- Network: TCP server/client with bincode protocol
-- Query: Expression AST, logical/physical plans, catalog integration
+- Network: TCP server/client with bincode protocol, connection pooling
+- Query: SQL parser, cost-based optimizer, join algorithms (hash/sort-merge/nested loop), executor
 - CLI: Server, client, local REPL modes
 - Python bindings: PyO3 with maturin build
-
-Not implemented:
-- B+Tree disk persistence
-- SQL parser
-- Cost-based query optimizer
-- Join algorithms
-- Compression (Snappy/LZ4)
+- Compression: LZ4 and Snappy for SSTable blocks
+- WAL group commit for concurrent write batching
+- Sharded LRU block cache (16 shards)
+- Cluster: Consistent hash ring, coordinator, membership protocol, shard rebalancing
 
 ## Development
 

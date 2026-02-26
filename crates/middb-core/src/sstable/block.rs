@@ -1,5 +1,6 @@
 use crate::{Error, Result};
 
+#[derive(Clone)]
 pub struct Block {
     data: Vec<u8>,
     restarts: Vec<u32>,

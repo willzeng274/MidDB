@@ -6,7 +6,8 @@ use crate::Result;
 use std::collections::HashMap;
 use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
+use parking_lot::RwLock;
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -51,7 +52,7 @@ impl CompactionWorker {
 
         while !shutdown.load(Ordering::SeqCst) {
             let task = {
-                let vs = version_set.read().unwrap();
+                let vs = version_set.read();
                 let version = vs.current();
                 picker.pick(&version)
             };
@@ -73,14 +74,14 @@ impl CompactionWorker {
         config: &Config,
     ) -> Result<()> {
         let file_id = {
-            let vs = version_set.read().unwrap();
+            let vs = version_set.read();
             vs.next_file_id()
         };
 
         let output_path = config.data_dir.join(format!("sst_{:08}.sst", file_id));
         
         let iters = {
-            let readers_guard = readers.read().unwrap();
+            let readers_guard = readers.read();
             let mut iters = Vec::new();
 
             for file in task.all_input_files() {
@@ -107,18 +108,18 @@ impl CompactionWorker {
 
         let new_reader = SSTableReader::open(&output_path)?;
         {
-            let mut readers_guard = readers.write().unwrap();
+            let mut readers_guard = readers.write();
             readers_guard.insert(file_id, new_reader);
         }
 
         let edit = task.to_edit(metadata);
         {
-            let mut vs = version_set.write().unwrap();
+            let mut vs = version_set.write();
             vs.apply_edit(edit);
         }
 
         {
-            let mut readers_guard = readers.write().unwrap();
+            let mut readers_guard = readers.write();
             for file in task.all_input_files() {
                 readers_guard.remove(&file.file_id);
             }
@@ -163,7 +164,7 @@ impl CompactionRunner {
 
     pub fn maybe_compact(&self) -> Result<bool> {
         let task = {
-            let vs = self.version_set.read().unwrap();
+            let vs = self.version_set.read();
             let version = vs.current();
             self.picker.pick(&version)
         };
@@ -233,7 +234,7 @@ mod tests {
         let compacted = runner.maybe_compact().unwrap();
         assert!(compacted);
 
-        let vs = version_set.read().unwrap();
+        let vs = version_set.read();
         assert_eq!(vs.l0_file_count(), 0);
         assert_eq!(vs.current().level(1).unwrap().file_count(), 1);
     }

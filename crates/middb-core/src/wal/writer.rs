@@ -31,6 +31,15 @@ impl WalWriter {
         self.bytes_written += encoded.len() as u64;
         Ok(())
     }
+
+    pub fn append_batch(&mut self, entries: &[WalEntry]) -> Result<()> {
+        for entry in entries {
+            let encoded = entry.encode();
+            self.file.write_all(&encoded)?;
+            self.bytes_written += encoded.len() as u64;
+        }
+        Ok(())
+    }
     
     pub fn flush(&mut self) -> Result<()> {
         self.file.flush()?;

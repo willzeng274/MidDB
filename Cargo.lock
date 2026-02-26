@@ -646,6 +646,7 @@ name = "middb-query"
 version = "0.1.0"
 dependencies = [
  "middb-core",
+ "parking_lot",
  "sqlparser",
  "tempfile",
 ]
