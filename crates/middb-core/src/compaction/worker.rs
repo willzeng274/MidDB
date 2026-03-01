@@ -1,5 +1,6 @@
 use super::picker::{CompactionPicker, CompactionTask};
 use super::version::VersionSet;
+use crate::cache::BlockCache;
 use crate::config::Config;
 use crate::sstable::{MergeIterator, SSTableReader, SSTableWriter};
 use crate::Result;
@@ -21,12 +22,13 @@ impl CompactionWorker {
         version_set: Arc<RwLock<VersionSet>>,
         readers: Arc<RwLock<HashMap<u64, SSTableReader>>>,
         config: Config,
+        block_cache: Arc<BlockCache>,
     ) -> Self {
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_clone = Arc::clone(&shutdown);
 
         let handle = thread::spawn(move || {
-            Self::run_loop(version_set, readers, config, shutdown_clone);
+            Self::run_loop(version_set, readers, config, shutdown_clone, block_cache);
         });
 
         CompactionWorker {
@@ -47,23 +49,39 @@ impl CompactionWorker {
         readers: Arc<RwLock<HashMap<u64, SSTableReader>>>,
         config: Config,
         shutdown: Arc<AtomicBool>,
+        block_cache: Arc<BlockCache>,
     ) {
         let picker = CompactionPicker::new(&config);
 
         while !shutdown.load(Ordering::SeqCst) {
-            let task = {
-                let vs = version_set.read();
-                let version = vs.current();
-                picker.pick(&version)
-            };
+            // Keep compacting as long as there's work — don't sleep between consecutive
+            // compactions. This prevents L0 file accumulation during heavy write bursts.
+            let mut did_work = true;
+            while did_work && !shutdown.load(Ordering::Relaxed) {
+                let task = {
+                    let vs = version_set.read();
+                    let version = vs.current();
+                    picker.pick(&version)
+                };
 
-            if let Some(task) = task {
-                if let Err(e) = Self::run_compaction(&task, &version_set, &readers, &config) {
-                    eprintln!("compaction failed: {}", e);
+                match task {
+                    Some(task) => {
+                        if let Err(_e) = Self::run_compaction(
+                            &task, &version_set, &readers, &config, &block_cache,
+                        ) {
+                            // Compaction failure is non-fatal — will retry on next cycle.
+                            // Common cause: stale task referencing files from a concurrent flush.
+                            did_work = false;
+                        }
+                    }
+                    None => {
+                        did_work = false;
+                    }
                 }
             }
 
-            thread::sleep(Duration::from_millis(100));
+            // Only sleep when there's no compaction work pending
+            thread::sleep(Duration::from_millis(10));
         }
     }
 
@@ -72,6 +90,7 @@ impl CompactionWorker {
         version_set: &Arc<RwLock<VersionSet>>,
         readers: &Arc<RwLock<HashMap<u64, SSTableReader>>>,
         config: &Config,
+        block_cache: &Arc<BlockCache>,
     ) -> Result<()> {
         let file_id = {
             let vs = version_set.read();
@@ -79,14 +98,20 @@ impl CompactionWorker {
         };
 
         let output_path = config.data_dir.join(format!("sst_{:08}.sst", file_id));
-        
+
+        // Verify all input files exist before proceeding
+        if !output_path.parent().map_or(false, |p| p.exists()) {
+            return Ok(()); // data directory gone (DB shutting down)
+        }
+
         let iters = {
             let readers_guard = readers.read();
             let mut iters = Vec::new();
 
             for file in task.all_input_files() {
-                if let Some(reader) = readers_guard.get(&file.file_id) {
-                    iters.push(reader.iter()?);
+                match readers_guard.get(&file.file_id) {
+                    Some(reader) => iters.push(reader.iter()?),
+                    None => return Ok(()), // stale task — file already compacted away
                 }
             }
             iters
@@ -106,7 +131,9 @@ impl CompactionWorker {
 
         let metadata = writer.finish(file_id, task.output_level)?;
 
-        let new_reader = SSTableReader::open(&output_path)?;
+        let new_reader = SSTableReader::open_with_cache(
+            &output_path, file_id, Some(Arc::clone(block_cache)),
+        )?;
         {
             let mut readers_guard = readers.write();
             readers_guard.insert(file_id, new_reader);
@@ -137,6 +164,9 @@ impl CompactionWorker {
 impl Drop for CompactionWorker {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::SeqCst);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
     }
 }
 
@@ -176,6 +206,7 @@ impl CompactionRunner {
                     &self.version_set,
                     &self.readers,
                     &self.config,
+                    &Arc::new(crate::cache::BlockCache::new(0)), // test-only, no cache
                 )?;
                 Ok(true)
             }

@@ -2,7 +2,7 @@ use crate::cache::BlockCache;
 use crate::catalog::{Catalog, CatalogError, TableSchema};
 use crate::compaction::{CompactionWorker, VersionSet};
 use crate::config::Config;
-use crate::memtable::MemTable;
+use crate::memtable::ShardedMemTable;
 use crate::sstable::SSTableReader;
 use crate::transaction::{TransactionManager, TxnError, TxnId, WriteOp};
 use crate::wal::{WalEntry, WalReader, WalWriter};
@@ -23,8 +23,8 @@ struct WalRequest {
 
 pub struct Database {
     config: Config,
-    memtable: Arc<RwLock<MemTable<Key, Value>>>,
-    immutable_memtable: Arc<RwLock<Option<MemTable<Key, Value>>>>,
+    memtable: Arc<RwLock<ShardedMemTable<Key, Value>>>,
+    immutable_memtable: Arc<RwLock<Option<ShardedMemTable<Key, Value>>>>,
     wal: Arc<RwLock<WalWriter>>,
     wal_tx: Option<channel::Sender<WalRequest>>,
     _wal_thread: Option<thread::JoinHandle<()>>,
@@ -48,12 +48,12 @@ impl Database {
         let wal_path = config.wal_dir.join("wal.log");
         let wal = WalWriter::create(&wal_path)?;
 
-        let mut memtable = MemTable::with_threshold(config.memtable_size);
+        let memtable = ShardedMemTable::with_threshold(config.memtable_size);
 
         let version_set = VersionSet::new();
         let sstable_readers = HashMap::new();
 
-        let sequence = Self::recover_from_wal(&wal_path, &mut memtable)?;
+        let sequence = Self::recover_from_wal(&wal_path, &memtable)?;
 
         let version_set = Arc::new(RwLock::new(version_set));
         let sstable_readers = Arc::new(RwLock::new(sstable_readers));
@@ -63,25 +63,28 @@ impl Database {
             Arc::clone(&version_set),
             Arc::clone(&sstable_readers),
             config.clone(),
+            Arc::clone(&block_cache),
         );
 
         let wal = Arc::new(RwLock::new(wal));
 
-        // Start WAL group commit thread when sync_writes is enabled.
+        // Start WAL writer thread for all configurations.
         // Multiple concurrent writers send entries to this thread, which batches
-        // them into a single append_batch + fsync, amortizing the fsync cost.
-        let (wal_tx, wal_thread) = if config.sync_writes {
-            let (tx, rx) = channel::bounded::<WalRequest>(256);
+        // them into a single append_batch call. With sync_writes=true, a single
+        // fsync is performed per batch (group commit). With sync_writes=false,
+        // the batch is written without fsync but still serialized through a
+        // single writer to avoid lock contention on the WAL file.
+        let sync_writes = config.sync_writes;
+        let (wal_tx, wal_thread) = {
+            let (tx, rx) = channel::bounded::<WalRequest>(4096);
             let wal_clone = Arc::clone(&wal);
             let handle = thread::Builder::new()
                 .name("middb-wal-writer".to_string())
                 .spawn(move || {
-                    Self::wal_writer_loop(wal_clone, rx);
+                    Self::wal_writer_loop(wal_clone, rx, sync_writes);
                 })
                 .expect("failed to spawn WAL writer thread");
             (Some(tx), Some(handle))
-        } else {
-            (None, None)
         };
 
         Ok(Database {
@@ -188,25 +191,32 @@ impl Database {
         Arc::clone(&self.catalog)
     }
 
-    /// Write WAL entries via group commit (sync_writes=true) or direct append (sync_writes=false).
+    /// Write WAL entries via the WAL writer thread.
+    /// With sync_writes=true: blocks until batch is written + fsync'd (durability guarantee).
+    /// With sync_writes=false: fire-and-forget to avoid blocking on channel roundtrip.
     fn write_wal(&self, entries: Vec<WalEntry>) -> Result<()> {
         if let Some(ref tx) = self.wal_tx {
-            // Group commit path: send to WAL writer thread, wait for batch fsync
             let (result_tx, result_rx) = channel::bounded(1);
             tx.send(WalRequest { entries, result_tx })
                 .map_err(|_| Error::Internal("WAL writer thread stopped".to_string()))?;
-            result_rx.recv()
-                .map_err(|_| Error::Internal("WAL writer thread stopped".to_string()))?
+            if self.config.sync_writes {
+                // Must wait for fsync to guarantee durability
+                result_rx.recv()
+                    .map_err(|_| Error::Internal("WAL writer thread stopped".to_string()))?
+            } else {
+                // Fire-and-forget: WAL writer will batch and write, caller proceeds immediately
+                Ok(())
+            }
         } else {
-            // Direct path: append without sync
+            // Fallback for after close() drops the sender
             let mut wal = self.wal.write();
             wal.append_batch(&entries)?;
             Ok(())
         }
     }
 
-    fn wal_writer_loop(wal: Arc<RwLock<WalWriter>>, rx: channel::Receiver<WalRequest>) {
-        const MAX_BATCH: usize = 256;
+    fn wal_writer_loop(wal: Arc<RwLock<WalWriter>>, rx: channel::Receiver<WalRequest>, sync_writes: bool) {
+        const MAX_BATCH: usize = 4096;
         let mut batch = Vec::with_capacity(MAX_BATCH);
 
         while let Ok(first) = rx.recv() {
@@ -220,57 +230,68 @@ impl Database {
                 }
             }
 
-            // Collect all entries, write once, sync once
+            // Collect all entries, write once, optionally sync
             let all_entries: Vec<WalEntry> = batch.iter()
                 .flat_map(|req| req.entries.iter().cloned())
                 .collect();
 
             let result = {
                 let mut wal = wal.write();
-                wal.append_batch(&all_entries).and_then(|_| wal.sync())
+                let r = wal.append_batch(&all_entries);
+                if sync_writes {
+                    r.and_then(|_| wal.sync())
+                } else {
+                    r
+                }
             };
 
             // Notify all waiters
             for req in batch.drain(..) {
                 let _ = req.result_tx.send(result.as_ref().map(|_| ()).map_err(|e| {
-                    Error::Internal(format!("WAL sync failed: {}", e))
+                    Error::Internal(format!("WAL write failed: {}", e))
                 }));
             }
         }
     }
 
     pub fn put(&self, key: Key, value: Value) -> Result<()> {
-        let seq = self.sequence.fetch_add(1, Ordering::SeqCst);
+        let seq = self.sequence.fetch_add(1, Ordering::Relaxed);
         let entry = WalEntry::put(seq, key.clone(), value.clone());
 
         self.write_wal(vec![entry])?;
 
-        {
-            let mut memtable = self.memtable.write();
+        let should_flush = {
+            let memtable = self.memtable.read();
             memtable.put(key, value).map_err(|e| Error::Internal(e))?;
+            memtable.should_flush()
+        };
 
-            if memtable.should_flush() {
-                drop(memtable);
-                self.flush_memtable()?;
-            }
+        if should_flush {
+            self.flush_memtable()?;
         }
 
         Ok(())
     }
 
     pub fn get(&self, key: &Key) -> Result<Option<Value>> {
+        // Check active memtable — use get_entry to distinguish tombstone from not-found
         {
             let memtable = self.memtable.read();
-            if let Some(value) = memtable.get(key) {
-                return Ok(Some(value.clone()));
+            match memtable.get_entry(key) {
+                Some(true) => return Ok(memtable.get(key)),  // value exists
+                Some(false) => return Ok(None),               // tombstone
+                None => {}                                    // not in this memtable
             }
         }
 
+        // Check immutable memtable
         {
             let imm = self.immutable_memtable.read();
             if let Some(ref imm_mt) = *imm {
-                if let Some(value) = imm_mt.get(key) {
-                    return Ok(Some(value.clone()));
+                match imm_mt.get_entry(key) {
+                    Some(true) => return Ok(imm_mt.get(key)),
+                    Some(false) => return Ok(None),
+                    None => {}
                 }
             }
         }
@@ -301,19 +322,19 @@ impl Database {
     }
 
     pub fn delete(&self, key: Key) -> Result<()> {
-        let seq = self.sequence.fetch_add(1, Ordering::SeqCst);
+        let seq = self.sequence.fetch_add(1, Ordering::Relaxed);
         let entry = WalEntry::delete(seq, key.clone());
 
         self.write_wal(vec![entry])?;
 
-        {
-            let mut memtable = self.memtable.write();
+        let should_flush = {
+            let memtable = self.memtable.read();
             memtable.delete(key).map_err(|e| Error::Internal(e))?;
+            memtable.should_flush()
+        };
 
-            if memtable.should_flush() {
-                drop(memtable);
-                self.flush_memtable()?;
-            }
+        if should_flush {
+            self.flush_memtable()?;
         }
 
         Ok(())
@@ -338,10 +359,10 @@ impl Database {
         };
         let sstable_path = self.config.data_dir.join(format!("sst_{:08}.sst", file_id));
 
-        // Swap active memtable to immutable — holds write lock only briefly
+        // Swap active memtable to immutable — holds outer write lock only briefly (pointer swap)
         {
             let mut mt = self.memtable.write();
-            let new_memtable = MemTable::with_threshold(self.config.memtable_size);
+            let new_memtable = ShardedMemTable::with_threshold(self.config.memtable_size);
             let old_memtable = std::mem::replace(&mut *mt, new_memtable);
             let mut imm = self.immutable_memtable.write();
             *imm = Some(old_memtable);
@@ -383,7 +404,7 @@ impl Database {
 
     fn recover_from_wal(
         wal_path: &PathBuf,
-        memtable: &mut MemTable<Key, Value>,
+        memtable: &ShardedMemTable<Key, Value>,
     ) -> Result<SequenceNumber> {
         if !wal_path.exists() {
             return Ok(0);
@@ -439,21 +460,13 @@ impl Database {
 
     pub fn scan(&self, start: &Key, end: &Key) -> Vec<(Key, Value)> {
         let memtable = self.memtable.read();
-        let mut results = Vec::new();
-
-        for (k, entry) in memtable.range(start, end) {
-            if let crate::memtable::ValueEntry::Value(v) = entry {
-                results.push((k.clone(), v.clone()));
-            }
-        }
+        let mut results = memtable.range(start, end);
 
         let imm = self.immutable_memtable.read();
         if let Some(ref imm_mt) = *imm {
-            for (k, entry) in imm_mt.range(start, end) {
-                if let crate::memtable::ValueEntry::Value(v) = entry {
-                    if !results.iter().any(|(rk, _)| rk == k) {
-                        results.push((k.clone(), v.clone()));
-                    }
+            for (k, v) in imm_mt.range(start, end) {
+                if !results.iter().any(|(rk, _)| rk == &k) {
+                    results.push((k, v));
                 }
             }
             results.sort_by(|(a, _), (b, _)| a.cmp(b));
@@ -470,7 +483,7 @@ impl Database {
         // Build all WAL entries and collect ops
         let mut wal_entries = Vec::with_capacity(batch.len());
         for op in &batch.ops {
-            let seq = self.sequence.fetch_add(1, Ordering::SeqCst);
+            let seq = self.sequence.fetch_add(1, Ordering::Relaxed);
             match op {
                 WriteBatchOp::Put(key, value) => {
                     wal_entries.push(WalEntry::put(seq, key.clone(), value.clone()));
@@ -483,9 +496,9 @@ impl Database {
 
         self.write_wal(wal_entries)?;
 
-        // Apply all ops to memtable
-        {
-            let mut memtable = self.memtable.write();
+        // Apply all ops to memtable — outer read lock, each op locks its own shard
+        let should_flush = {
+            let memtable = self.memtable.read();
             for op in batch.ops {
                 match op {
                     WriteBatchOp::Put(key, value) => {
@@ -496,11 +509,11 @@ impl Database {
                     }
                 }
             }
+            memtable.should_flush()
+        };
 
-            if memtable.should_flush() {
-                drop(memtable);
-                self.flush_memtable()?;
-            }
+        if should_flush {
+            self.flush_memtable()?;
         }
 
         Ok(())

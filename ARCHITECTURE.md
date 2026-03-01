@@ -344,33 +344,38 @@ All tests run on a single machine, release build. Benchmarks include both non-du
 
 | Benchmark | Throughput | p50 | p99 |
 |-----------|-----------|-----|-----|
-| Sequential writes (128B values) | 1,098,540 ops/s | 1 μs | 5 μs |
-| Sequential writes (1KB values) | 240,232 ops/s | 2 μs | 9 μs |
-| Batch writes (batch=100) | 1,212,854 ops/s | 1 μs | 1 μs |
-| Random reads (50K pool) | 2,626,435 ops/s | 1 μs | 3 μs |
-| Mixed 50/50 read/write | 1,569,816 ops/s | 1 μs | 5 μs |
-| Mixed 95/5 read-heavy | 2,992,079 ops/s | 1 μs | 1 μs |
-| Scan (100 keys) | 235,109 ops/s | 2 μs | 11 μs |
-| Transactions (single-key) | 1,104,108 ops/s | 1 μs | 5 μs |
-| Disk B+Tree insert+lookup | 210,126 ops/s | 3 μs | 11 μs |
-| Overwrite stress (5x rewrite) | 1,923,740 ops/s | 1 μs | 3 μs |
+| Sequential writes (128B values) | 1,320,000 ops/s | 1 μs | 2 μs |
+| Sequential writes (1KB values) | 486,000 ops/s | 1 μs | 2 μs |
+| Batch writes (batch=100) | 3,427,000 ops/s | 1 μs | 1 μs |
+| Batch writes (batch=1000) | 3,590,000 ops/s | 1 μs | 1 μs |
+| Random reads (50K pool) | 2,476,000 ops/s | 1 μs | 1 μs |
+| Mixed 50/50 read/write | 1,636,000 ops/s | 1 μs | 1 μs |
+| Mixed 95/5 read-heavy | 2,388,000 ops/s | 1 μs | 1 μs |
+| Scan (100 keys) | 249,000 ops/s | 2 μs | 4 μs |
+| Transactions (single-key) | 803,000 ops/s | 1 μs | 6 μs |
+| Disk B+Tree insert+lookup | 214,000 ops/s | 3 μs | 7 μs |
+| Overwrite stress (5x rewrite) | 997,000 ops/s | 1 μs | 2 μs |
 
 #### Concurrent Benchmarks (sync_writes=false)
 
 | Benchmark | Throughput | Notes |
 |-----------|-----------|-------|
-| Concurrent writes (10 threads) | 634,573 ops/s | Write contention from memtable lock |
-| Concurrent reads (10 threads) | 3,980,093 ops/s | Near-linear read scaling |
-| Concurrent mixed (5w + 5r) | 1,028,690 ops/s | Mixed workload |
+| Concurrent writes (4 threads) | 1,237,000 ops/s | Exceeds single-threaded — true scaling |
+| Concurrent writes (10 threads) | 1,098,000 ops/s | Matches single-threaded (no degradation) |
+| Concurrent writes (16 threads) | 664,000 ops/s | Channel backpressure at high thread count |
+| Concurrent reads (10 threads) | 2,199,000 ops/s | Near-linear read scaling |
+| Concurrent mixed (5w + 5r) | 2,467,000 ops/s | Mixed workload |
+
+Key scalability features: 16-shard memtable (per-shard RwLock), fire-and-forget WAL writes with dedicated writer thread, sharded block cache.
 
 #### Durable Benchmarks (sync_writes=true)
 
 | Benchmark | Throughput | p50 | p99 |
 |-----------|-----------|-----|-----|
-| Durable writes (fsync per write) | 240 ops/s | 4,021 μs | 6,143 μs |
-| Durable batch (batch=100, single fsync) | 13,393 ops/s | 58 μs | 172 μs |
+| Durable writes (fsync per write) | 239 ops/s | 4,033 μs | 7,011 μs |
+| Durable batch (batch=100, single fsync) | 20,491 ops/s | 49 μs | 62 μs |
 
-Durable writes are slow because each write requires an `fsync()` to disk (~4ms per call). Durable batch amortizes the fsync cost across 100 writes via WAL group commit, achieving ~56x better throughput with the same durability guarantee.
+Durable writes are slow because each write requires an `fsync()` to disk (~4ms per call). Durable batch amortizes the fsync cost across 100 writes via WAL group commit, achieving ~85x better throughput with the same durability guarantee.
 
 #### Query Engine
 
@@ -393,31 +398,46 @@ Durable writes are slow because each write requires an `fsync()` to disk (~4ms p
 | Pipeline (batch=20) | 2,074 batches/s (~41K effective ops/s) | 455 μs | 640 μs |
 | Transactions over network | 6,016 ops/s | 159 μs | 241 μs |
 
+### Important Caveats
+
+**The non-durable benchmarks above measure in-memory performance.** With 50K-100K keys at 128B values (~6.4 MB), the entire dataset fits in the 64 MB memtable. Nothing flushes to disk. These numbers measure BTreeMap insert and lookup speed with lock overhead — not end-to-end database throughput on realistic workloads.
+
+**The fire-and-forget WAL (sync_writes=false) is weaker than RocksDB's sync=false.** RocksDB with sync=false still waits for the WAL write to reach the kernel buffer; it just skips fsync. MidDB's fire-and-forget returns before the WAL write completes, which means even a process crash (not just machine crash) can lose recent writes.
+
+**The durable benchmarks (sync_writes=true) are the only honest disk numbers.** Both durable single writes (239 ops/s) and durable batch (20K ops/s) reflect real fsync latency and are comparable to any database on the same hardware.
+
 ### Comparison with Production Databases
 
-These comparisons are approximate. Published benchmarks vary by hardware, workload, configuration, and methodology. MidDB numbers are from a single-machine load test. All engines compared with `sync=false` unless noted.
+These comparisons are approximate and should be read with the caveats above. Published benchmarks vary by hardware, workload, configuration, and methodology. MidDB's non-durable numbers are from small in-memory workloads; RocksDB/LevelDB numbers are typically from larger, disk-bound workloads.
 
 #### vs RocksDB
 
 | Metric | MidDB | RocksDB | Notes |
 |--------|-------|---------|-------|
-| Sequential writes | ~1.1M ops/s | ~400K-800K ops/s | RocksDB benchmarks vary by hardware; MidDB's in-memory path is simpler with less overhead |
-| Random reads | ~2.6M ops/s | ~840K ops/s | Both use block caches; MidDB benefits from 16-shard cache and lighter code path |
-| Concurrent writes (10 threads) | ~635K ops/s | ~1M+ ops/s | RocksDB's concurrent skip list scales better under contention |
-| Durable writes (fsync) | ~240 ops/s | ~200-300 ops/s | Both bottleneck on fsync; similar performance |
-| Durable batch | ~13K ops/s | ~50K+ ops/s | RocksDB's group commit is more mature |
+| In-memory writes (50K keys) | ~1.3M ops/s | ~400K-800K ops/s | **Not apples-to-apples**: MidDB test fits in memtable; RocksDB benchmarks use millions of keys with disk I/O |
+| In-memory reads (50K keys) | ~2.5M ops/s | ~840K ops/s | Same caveat: MidDB reads from memtable, RocksDB reads from SSTables |
+| Concurrent writes (10 threads) | ~1.1M ops/s | ~1M+ ops/s | Both in-memory; MidDB eliminated contention via sharding |
+| Durable writes (fsync) | ~240 ops/s | ~200-300 ops/s | **Fair comparison**: both bottleneck on fsync |
+| Durable batch | ~20K ops/s | ~50K+ ops/s | **Fair comparison**: RocksDB's group commit is more mature |
 
-**MidDB is competitive on single-threaded throughput** because it has a much simpler code path — no column families, no statistics collection, no rate limiters, no compaction priority scheduling. The trade-off is that RocksDB scales better under concurrent write contention (concurrent skip list vs global write lock) and has more sophisticated group commit.
+**Why MidDB appears fast on small workloads:** Simpler code path — no column families, no statistics collection, no rate limiters, no compaction scheduling. When the workload fits in memory, this overhead matters. On disk-bound workloads with millions of keys, compaction quality, I/O scheduling, and read amplification dominate — areas where RocksDB has 10+ years of optimization.
+
+**Where RocksDB genuinely wins:**
+- Large datasets that exceed memtable (compaction, read amplification)
+- Sustained write throughput under compaction pressure
+- Concurrent write scaling beyond 16 threads (lock-free skip list)
+- Durable batch throughput (more sophisticated group commit)
+- Crash recovery completeness (RocksDB sync=false still guarantees process-crash recovery)
 
 #### vs LevelDB
 
 | Metric | MidDB | LevelDB | Notes |
 |--------|-------|---------|-------|
-| Sequential writes | ~1.1M ops/s | ~400K ops/s | MidDB's BTreeMap memtable + parking_lot locks are faster |
-| Random reads | ~2.6M ops/s | ~85K-190K ops/s | MidDB's sharded block cache and bloom filters help significantly |
-| Scan (100 keys) | ~235K ops/s | ~2.4M ops/s (261 MB/s) | LevelDB reads sequentially from sorted files more efficiently |
+| In-memory writes | ~1.3M ops/s | ~400K ops/s | MidDB test is in-memory; LevelDB benchmarks include disk flushes |
+| In-memory reads | ~2.5M ops/s | ~85K-190K ops/s | Same caveat |
+| Scan (100 keys) | ~249K ops/s | ~2.4M ops/s (261 MB/s) | LevelDB reads sequentially from sorted files more efficiently |
 
-**MidDB outperforms LevelDB** on point operations due to optimized locking, block cache, and bloom filters. LevelDB is faster for large sequential scans due to its simpler, more cache-friendly SSTable iteration.
+MidDB is faster on small in-memory workloads due to sharded memtable and block cache. LevelDB is faster for sequential scans and would likely outperform MidDB on larger workloads that involve disk I/O, as LevelDB has a more mature SSTable/compaction pipeline.
 
 #### vs DuckDB
 
@@ -441,10 +461,20 @@ The benchmarks above are backed by correctness fixes that ensure honest results:
 4. **Atomic MVCC**: begin() and commit() hold proper locks for snapshot isolation
 5. **Accurate size tracking**: MemTable decrements size on overwrite — no premature flushes
 
+### Concurrency Architecture
+
+The write path is designed for concurrent scalability:
+
+1. **16-shard memtable**: Keys are hash-distributed across 16 independent `RwLock<BTreeMap>` shards. Writers only lock their target shard, allowing up to 16 parallel inserts with zero contention.
+2. **Fire-and-forget WAL**: With `sync_writes=false`, WAL entries are sent to a dedicated writer thread via a lock-free crossbeam channel without waiting for acknowledgment. The writer thread batches entries for efficient I/O.
+3. **Group commit WAL**: With `sync_writes=true`, writers block until the batch is fsync'd, but multiple writers share a single fsync call.
+4. **Sharded block cache**: 16-shard LRU cache allows concurrent SSTable reads without contention.
+5. **Per-transaction locks**: `RwLock<HashMap<TxnId, Mutex<Transaction>>>` — transaction operations use a shared read lock on the map and per-transaction mutexes.
+
 ### Where to Improve
 
-1. **Concurrent memtable writes**: The memtable is behind a single `RwLock`. RocksDB uses a lock-free concurrent skip list. A sharded memtable or concurrent data structure would improve multi-threaded write throughput.
-2. **WAL group commit tuning**: The current batch size (256) and timeout could be tuned per workload. RocksDB dynamically adjusts batch parameters.
+1. **Lock-free memtable**: A concurrent skip list (like RocksDB's) would eliminate per-shard lock overhead entirely. The current 16-shard approach degrades above 16 threads.
+2. **WAL writer thread scaling**: The single WAL writer thread becomes a bottleneck at >16 concurrent writers. Multiple writer threads with partitioned WAL files could help.
 3. **Prefetching and direct I/O**: Modern engines use io_uring, direct I/O, and read-ahead for I/O efficiency.
 4. **Compaction scheduling**: Currently triggers on L0 file count; could use size-tiered compaction or priority-based scheduling.
 

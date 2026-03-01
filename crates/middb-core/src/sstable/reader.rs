@@ -5,7 +5,10 @@ use crate::cache::BlockCache;
 use crate::compression;
 use crate::{Error, Result};
 use std::fs::File;
+#[cfg(not(unix))]
 use std::io::{Read, Seek, SeekFrom};
+#[cfg(unix)]
+use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -25,32 +28,57 @@ impl SSTableReader {
     }
 
     pub fn open_with_cache<P: AsRef<Path>>(path: P, file_id: u64, cache: Option<Arc<BlockCache>>) -> Result<Self> {
-        let mut file = File::open(path)?;
-
-        let file_size = file.seek(SeekFrom::End(0))?;
+        let file = File::open(path)?;
+        let file_size = file.metadata()?.len();
 
         if file_size < FOOTER_SIZE as u64 {
             return Err(Error::Corruption("SSTable file too small".to_string()));
         }
 
-        file.seek(SeekFrom::End(-(FOOTER_SIZE as i64)))?;
+        // Read footer from end of file using pread (no seek needed)
+        let footer_offset = file_size - FOOTER_SIZE as u64;
         let mut footer_bytes = [0u8; FOOTER_SIZE];
-        file.read_exact(&mut footer_bytes)?;
+        #[cfg(unix)]
+        {
+            file.read_at(&mut footer_bytes, footer_offset)?;
+        }
+        #[cfg(not(unix))]
+        {
+            let mut f = &file;
+            f.seek(SeekFrom::Start(footer_offset))?;
+            f.read_exact(&mut footer_bytes)?;
+        }
 
         let footer = Footer::decode(&footer_bytes)?;
 
         let bloom_filter = {
-            file.seek(SeekFrom::Start(footer.bloom_handle.offset))?;
             let mut bloom_data = vec![0u8; footer.bloom_handle.size as usize];
-            file.read_exact(&mut bloom_data)?;
+            #[cfg(unix)]
+            {
+                file.read_at(&mut bloom_data, footer.bloom_handle.offset)?;
+            }
+            #[cfg(not(unix))]
+            {
+                let mut f = &file;
+                f.seek(SeekFrom::Start(footer.bloom_handle.offset))?;
+                f.read_exact(&mut bloom_data)?;
+            }
             BloomFilter::from_bytes_with_meta(&bloom_data)
         };
 
         // Pre-cache the index block
         let cached_index = {
-            file.seek(SeekFrom::Start(footer.index_handle.offset))?;
             let mut data = vec![0u8; footer.index_handle.size as usize];
-            file.read_exact(&mut data)?;
+            #[cfg(unix)]
+            {
+                file.read_at(&mut data, footer.index_handle.offset)?;
+            }
+            #[cfg(not(unix))]
+            {
+                let mut f = &file;
+                f.seek(SeekFrom::Start(footer.index_handle.offset))?;
+                f.read_exact(&mut data)?;
+            }
             let decompressed = compression::decompress(&data)?;
             Some(Arc::new(Block::decode(&decompressed)?))
         };
@@ -124,10 +152,20 @@ impl SSTableReader {
     }
 
     fn read_block_raw(&self, handle: &BlockHandle) -> Result<Block> {
-        let mut file = self.file.as_ref();
-        file.seek(SeekFrom::Start(handle.offset))?;
         let mut data = vec![0u8; handle.size as usize];
-        file.read_exact(&mut data)?;
+        // Use pread (positioned read) to avoid seek+read race when multiple
+        // threads share the same Arc<File>. pread is atomic and doesn't
+        // modify the file offset.
+        #[cfg(unix)]
+        {
+            self.file.read_at(&mut data, handle.offset)?;
+        }
+        #[cfg(not(unix))]
+        {
+            let mut file = self.file.as_ref();
+            file.seek(SeekFrom::Start(handle.offset))?;
+            file.read_exact(&mut data)?;
+        }
         let decompressed = compression::decompress(&data)?;
         Block::decode(&decompressed)
     }

@@ -1,9 +1,11 @@
 use crate::{Result, sstable::SSTableWriter};
+use parking_lot::RwLock;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 const NODE_OVERHEAD: usize = 40;
+const NUM_SHARDS: usize = 16;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ValueEntry<V> {
@@ -162,6 +164,196 @@ impl<K: Ord, V> MemTable<K, V> {
 impl<K: Ord, V> Default for MemTable<K, V> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Sharded memtable with 16 independent BTreeMap shards for concurrent write scalability.
+/// Each shard has its own RwLock, so up to 16 writers can proceed in parallel.
+pub struct ShardedMemTable<K, V> {
+    shards: Vec<RwLock<BTreeMap<K, ValueEntry<V>>>>,
+    approx_size: AtomicUsize,
+    flush_threshold: usize,
+}
+
+impl<K: Ord, V> ShardedMemTable<K, V> {
+    pub fn with_threshold(flush_threshold: usize) -> Self {
+        let mut shards = Vec::with_capacity(NUM_SHARDS);
+        for _ in 0..NUM_SHARDS {
+            shards.push(RwLock::new(BTreeMap::new()));
+        }
+        ShardedMemTable {
+            shards,
+            approx_size: AtomicUsize::new(0),
+            flush_threshold,
+        }
+    }
+
+    fn shard_index(key: &[u8]) -> usize {
+        let mut h: u64 = 0x517CC1B727220A95;
+        for &b in key.iter().take(8) {
+            h = h.wrapping_mul(0x9E3779B97F4A7C15).wrapping_add(b as u64);
+        }
+        (h as usize) & (NUM_SHARDS - 1)
+    }
+
+    pub fn approx_size(&self) -> usize {
+        self.approx_size.load(Ordering::Relaxed)
+    }
+
+    pub fn should_flush(&self) -> bool {
+        self.approx_size() >= self.flush_threshold
+    }
+
+    pub fn len(&self) -> usize {
+        self.shards.iter().map(|s| s.read().len()).sum()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.approx_size() == 0
+    }
+
+    pub fn put(&self, key: K, value: V) -> std::result::Result<(), String>
+    where
+        K: AsRef<[u8]>,
+        V: AsRef<[u8]>,
+    {
+        let key_size = key.as_ref().len();
+        let value_size = value.as_ref().len();
+        let new_entry_size = key_size + value_size + NODE_OVERHEAD;
+        let shard_idx = Self::shard_index(key.as_ref());
+
+        let mut shard = self.shards[shard_idx].write();
+
+        // Subtract old entry size if overwriting
+        if let Some(old_entry) = shard.get(&key) {
+            let old_size = key_size + NODE_OVERHEAD + match old_entry {
+                ValueEntry::Value(v) => v.as_ref().len(),
+                ValueEntry::Tombstone => 0,
+            };
+            self.approx_size.fetch_sub(old_size, Ordering::Relaxed);
+        }
+
+        shard.insert(key, ValueEntry::Value(value));
+        self.approx_size.fetch_add(new_entry_size, Ordering::Relaxed);
+
+        Ok(())
+    }
+
+    /// Returns owned value since the value lives behind a shard lock guard.
+    pub fn get(&self, key: &K) -> Option<V>
+    where
+        K: AsRef<[u8]>,
+        V: Clone,
+    {
+        let shard_idx = Self::shard_index(key.as_ref());
+        let shard = self.shards[shard_idx].read();
+        match shard.get(key) {
+            Some(ValueEntry::Value(v)) => Some(v.clone()),
+            Some(ValueEntry::Tombstone) => None,
+            None => None,
+        }
+    }
+
+    /// Returns true if key exists as a tombstone (needed for get path to distinguish
+    /// "not found" from "deleted").
+    pub fn get_entry(&self, key: &K) -> Option<bool>
+    where
+        K: AsRef<[u8]>,
+    {
+        let shard_idx = Self::shard_index(key.as_ref());
+        let shard = self.shards[shard_idx].read();
+        match shard.get(key) {
+            Some(ValueEntry::Value(_)) => Some(true),   // exists as value
+            Some(ValueEntry::Tombstone) => Some(false),  // exists as tombstone
+            None => None,                                 // not found
+        }
+    }
+
+    pub fn delete(&self, key: K) -> std::result::Result<(), String>
+    where
+        K: AsRef<[u8]>,
+        V: AsRef<[u8]>,
+    {
+        let key_size = key.as_ref().len();
+        let new_entry_size = key_size + NODE_OVERHEAD;
+        let shard_idx = Self::shard_index(key.as_ref());
+
+        let mut shard = self.shards[shard_idx].write();
+
+        // Subtract old entry size if overwriting
+        if let Some(old_entry) = shard.get(&key) {
+            let old_size = key_size + NODE_OVERHEAD + match old_entry {
+                ValueEntry::Value(v) => v.as_ref().len(),
+                ValueEntry::Tombstone => 0,
+            };
+            self.approx_size.fetch_sub(old_size, Ordering::Relaxed);
+        }
+
+        shard.insert(key, ValueEntry::Tombstone);
+        self.approx_size.fetch_add(new_entry_size, Ordering::Relaxed);
+
+        Ok(())
+    }
+
+    /// Collect sorted entries from all shards for range queries.
+    pub fn range(&self, start: &K, end: &K) -> Vec<(K, V)>
+    where
+        K: Clone,
+        V: Clone,
+    {
+        let mut results = Vec::new();
+        for shard in &self.shards {
+            let guard = shard.read();
+            for (k, entry) in guard.range(start..end) {
+                if let ValueEntry::Value(v) = entry {
+                    results.push((k.clone(), v.clone()));
+                }
+            }
+        }
+        results.sort_by(|(a, _), (b, _)| a.cmp(b));
+        results
+    }
+
+    pub fn flush_to_sstable<P: AsRef<Path>>(
+        &self,
+        path: P,
+        file_id: u64,
+        level: u32,
+        block_size: usize,
+    ) -> Result<crate::sstable::SSTableMetadata>
+    where
+        K: AsRef<[u8]> + Clone,
+        V: AsRef<[u8]> + Clone,
+    {
+        // Collect all entries from all shards, then sort
+        let mut all_entries: Vec<(K, ValueEntry<V>)> = Vec::new();
+        for shard in &self.shards {
+            let guard = shard.read();
+            for (k, v) in guard.iter() {
+                all_entries.push((k.clone(), v.clone()));
+            }
+        }
+        all_entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+        let mut writer = SSTableWriter::create(path, block_size)?;
+
+        for (key, entry) in &all_entries {
+            let key_bytes: &[u8] = key.as_ref();
+            match entry {
+                ValueEntry::Value(value) => {
+                    let value_bytes: &[u8] = value.as_ref();
+                    let mut tagged = Vec::with_capacity(1 + value_bytes.len());
+                    tagged.push(0x01);
+                    tagged.extend_from_slice(value_bytes);
+                    writer.add(key_bytes, &tagged)?;
+                }
+                ValueEntry::Tombstone => {
+                    writer.add(key_bytes, &[0x02])?;
+                }
+            }
+        }
+
+        writer.finish(file_id, level)
     }
 }
 
