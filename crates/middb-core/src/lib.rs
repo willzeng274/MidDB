@@ -21,7 +21,7 @@ pub mod db;
 pub use error::{Error, Result};
 pub use config::{Config, CompactionStyle};
 pub use types::{Key, Value, SequenceNumber, Timestamp, PageId, FileId, Level};
-pub use memtable::{MemTable, ValueEntry};
+pub use memtable::{MemTable, ShardedMemTable, ValueEntry};
 pub use skiplist::SkipList;
 pub use bptree::{BPTree, DiskBPTree};
 pub use db::{Database, DatabaseStats, WriteBatch, WriteBatchOp};
