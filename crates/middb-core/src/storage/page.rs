@@ -37,8 +37,7 @@ impl Page {
     pub fn get_slice(&self, offset: usize, len: usize) -> Result<&[u8]> {
         if offset + len > PAGE_SIZE {
             return Err(crate::Error::InvalidArgument(format!(
-                "Slice out of bounds: offset={}, len={}, page_size={}",
-                offset, len, PAGE_SIZE
+                "Slice out of bounds: offset={offset}, len={len}, page_size={PAGE_SIZE}"
             )));
         }
         

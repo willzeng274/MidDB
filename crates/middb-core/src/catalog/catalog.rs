@@ -11,10 +11,10 @@ pub enum CatalogError {
 impl std::fmt::Display for CatalogError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CatalogError::TableNotFound(name) => write!(f, "table not found: {}", name),
-            CatalogError::TableAlreadyExists(name) => write!(f, "table already exists: {}", name),
+            CatalogError::TableNotFound(name) => write!(f, "table not found: {name}"),
+            CatalogError::TableAlreadyExists(name) => write!(f, "table already exists: {name}"),
             CatalogError::ColumnNotFound { table, column } => {
-                write!(f, "column '{}' not found in table '{}'", column, table)
+                write!(f, "column '{column}' not found in table '{table}'")
             }
         }
     }

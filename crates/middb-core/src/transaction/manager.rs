@@ -196,7 +196,7 @@ impl TransactionManager {
 
                 committed
                     .entry(key.clone())
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(write);
             }
         }
@@ -220,11 +220,10 @@ impl TransactionManager {
             let mut latest: Option<&CommittedWrite> = None;
 
             for write in versions {
-                if write.version <= start_version {
-                    if latest.is_none() || write.version > latest.unwrap().version {
+                if write.version <= start_version
+                    && (latest.is_none() || write.version > latest.unwrap().version) {
                         latest = Some(write);
                     }
-                }
             }
 
             if let Some(w) = latest {
@@ -241,6 +240,16 @@ impl TransactionManager {
 
     pub fn current_version(&self) -> Version {
         self.current_version.load(Ordering::SeqCst)
+    }
+
+    /// Returns the minimum start_version across all active transactions,
+    /// or None if no transactions are active. Used for safe GC — we must not
+    /// delete version history that active transactions might still read.
+    pub fn min_active_start_version(&self) -> Option<Version> {
+        let active = self.active_txns.read();
+        active.values()
+            .map(|m| m.lock().start_version)
+            .min()
     }
 
     pub fn gc(&self, min_version: Version) {
@@ -270,9 +279,9 @@ pub enum TxnError {
 impl std::fmt::Display for TxnError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TxnError::TxnNotFound(id) => write!(f, "transaction {} not found", id),
-            TxnError::TxnNotActive(id) => write!(f, "transaction {} not active", id),
-            TxnError::Conflict(key) => write!(f, "conflict on key {:?}", key),
+            TxnError::TxnNotFound(id) => write!(f, "transaction {id} not found"),
+            TxnError::TxnNotActive(id) => write!(f, "transaction {id} not active"),
+            TxnError::Conflict(key) => write!(f, "conflict on key {key:?}"),
         }
     }
 }
@@ -361,7 +370,7 @@ mod tests {
 
         for i in 0..5 {
             let t = tm.begin();
-            tm.record_write(t, b"key".to_vec(), Some(format!("v{}", i).into_bytes())).unwrap();
+            tm.record_write(t, b"key".to_vec(), Some(format!("v{i}").into_bytes())).unwrap();
             tm.commit(t).unwrap();
         }
 

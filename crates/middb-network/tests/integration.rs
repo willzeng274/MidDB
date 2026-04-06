@@ -107,12 +107,12 @@ async fn test_concurrent_clients() {
         handles.push(tokio::spawn(async move {
             let mut client = Client::connect("127.0.0.1:19005").await.unwrap();
             for j in 0..20 {
-                let key = format!("client{}_{}", i, j).into_bytes();
-                let value = format!("val{}_{}", i, j).into_bytes();
+                let key = format!("client{i}_{j}").into_bytes();
+                let value = format!("val{i}_{j}").into_bytes();
                 client.put(&key, &value).await.unwrap();
             }
             for j in 0..20 {
-                let key = format!("client{}_{}", i, j).into_bytes();
+                let key = format!("client{i}_{j}").into_bytes();
                 let val = client.get(&key).await.unwrap();
                 assert!(val.is_some());
             }

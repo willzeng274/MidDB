@@ -1,6 +1,8 @@
 use crate::protocol::{Frame, FramePayload, Request, Response, MAX_FRAME_SIZE};
 use middb_core::Database;
+use std::future::Future;
 use std::io;
+use std::pin::Pin;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufWriter};
 use tokio::net::{TcpListener, TcpStream};
@@ -8,21 +10,52 @@ use tokio::sync::{mpsc, Semaphore};
 
 const MAX_CONCURRENT_REQUESTS: usize = 256;
 
-pub struct Server {
+/// Trait for handling requests. Implement this to plug in different backends
+/// (standalone Database, cluster node, etc.)
+pub trait RequestHandler: Send + Sync + 'static {
+    fn handle(&self, request: Request) -> Pin<Box<dyn Future<Output = Response> + Send + '_>>;
+}
+
+/// Default handler that dispatches to a local Database.
+pub struct LocalHandler {
     db: Arc<Database>,
+}
+
+impl LocalHandler {
+    pub fn new(db: Arc<Database>) -> Self {
+        LocalHandler { db }
+    }
+}
+
+impl RequestHandler for LocalHandler {
+    fn handle(&self, request: Request) -> Pin<Box<dyn Future<Output = Response> + Send + '_>> {
+        let response = handle_request(&self.db, request);
+        Box::pin(async move { response })
+    }
+}
+
+pub struct Server {
+    handler: Arc<dyn RequestHandler>,
     addr: String,
 }
 
 impl Server {
     pub fn new(db: Database, addr: String) -> Self {
         Server {
-            db: Arc::new(db),
+            handler: Arc::new(LocalHandler::new(Arc::new(db))),
             addr,
         }
     }
 
     pub fn from_arc(db: Arc<Database>, addr: String) -> Self {
-        Server { db, addr }
+        Server {
+            handler: Arc::new(LocalHandler::new(db)),
+            addr,
+        }
+    }
+
+    pub fn with_handler(handler: Arc<dyn RequestHandler>, addr: String) -> Self {
+        Server { handler, addr }
     }
 
     pub async fn run(&self) -> io::Result<()> {
@@ -30,17 +63,17 @@ impl Server {
 
         loop {
             let (socket, _addr) = listener.accept().await?;
-            let db = Arc::clone(&self.db);
+            let handler = Arc::clone(&self.handler);
             tokio::spawn(async move {
-                if let Err(e) = handle_connection(socket, db).await {
-                    eprintln!("Connection error: {}", e);
+                if let Err(e) = handle_connection(socket, handler).await {
+                    eprintln!("Connection error: {e}");
                 }
             });
         }
     }
 }
 
-async fn handle_connection(socket: TcpStream, db: Arc<Database>) -> io::Result<()> {
+pub async fn handle_connection(socket: TcpStream, handler: Arc<dyn RequestHandler>) -> io::Result<()> {
     let (mut reader, writer) = socket.into_split();
     let mut writer = BufWriter::new(writer);
     let (tx, mut rx) = mpsc::channel::<Frame>(MAX_CONCURRENT_REQUESTS);
@@ -51,7 +84,7 @@ async fn handle_connection(socket: TcpStream, db: Arc<Database>) -> io::Result<(
             let data = match frame.encode() {
                 Ok(d) => d,
                 Err(e) => {
-                    eprintln!("Encode error: {}", e);
+                    eprintln!("Encode error: {e}");
                     continue;
                 }
             };
@@ -87,13 +120,13 @@ async fn handle_connection(socket: TcpStream, db: Arc<Database>) -> io::Result<(
             _ => continue,
         };
 
-        let db = Arc::clone(&db);
+        let handler = Arc::clone(&handler);
         let tx = tx.clone();
         let permit = Arc::clone(&semaphore);
 
         tokio::spawn(async move {
             let _permit = permit.acquire().await;
-            let response = handle_request(&db, request);
+            let response = handler.handle(request).await;
             let _ = tx.send(Frame::response(request_id, response)).await;
         });
     }
@@ -103,7 +136,7 @@ async fn handle_connection(socket: TcpStream, db: Arc<Database>) -> io::Result<(
     Ok(())
 }
 
-fn handle_request(db: &Arc<Database>, request: Request) -> Response {
+pub fn handle_request(db: &Arc<Database>, request: Request) -> Response {
     match request {
         Request::Get { key } => match db.get(&key) {
             Ok(value) => Response::Value(value),
@@ -159,6 +192,23 @@ fn handle_request(db: &Arc<Database>, request: Request) -> Response {
             Err(e) => Response::Error(e.to_string()),
         },
         Request::Ping => Response::Pong,
+
+        // Cluster-internal messages are not handled in standalone mode
+        Request::ReplicateWrite { key, value } => {
+            match db.put(key, value) {
+                Ok(()) => Response::Ok,
+                Err(e) => Response::Error(e.to_string()),
+            }
+        },
+        Request::ReplicateDelete { key } => {
+            match db.delete(key) {
+                Ok(()) => Response::Ok,
+                Err(e) => Response::Error(e.to_string()),
+            }
+        },
+        Request::Heartbeat { .. } => Response::HeartbeatAck,
+        Request::JoinCluster { .. } => Response::Error("Not a cluster node".to_string()),
+        Request::GetClusterState => Response::Error("Not a cluster node".to_string()),
     }
 }
 
@@ -167,7 +217,7 @@ fn handle_query(db: &Arc<Database>, sql: &str) -> Response {
 
     let logical_plan = match SqlParser::parse(sql) {
         Ok(plan) => plan,
-        Err(e) => return Response::Error(format!("Parse error: {}", e)),
+        Err(e) => return Response::Error(format!("Parse error: {e}")),
     };
 
     let planner = Planner::new();
@@ -186,14 +236,14 @@ fn handle_query(db: &Arc<Database>, sql: &str) -> Response {
                 .iter()
                 .map(|row| {
                     columns.iter().map(|col| {
-                        row.get_column(col).map(|v| format!("{:?}", v))
+                        row.get_column(col).map(|v| format!("{v:?}"))
                     }).collect()
                 })
                 .collect();
 
             Response::QueryResult { columns, rows: result_rows }
         }
-        Err(e) => Response::Error(format!("Execute error: {}", e)),
+        Err(e) => Response::Error(format!("Execute error: {e}")),
     }
 }
 

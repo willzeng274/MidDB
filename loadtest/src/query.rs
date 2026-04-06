@@ -30,17 +30,15 @@ fn exec(db: &Arc<Database>, sql: &str) -> Result<Vec<middb_query::Row>, String> 
 }
 
 fn sql_parse_throughput(count: u64) {
-    let mut runner = LoadTestRunner::new(&format!("sql_parse (n={})", count));
-    let queries = vec![
-        "SELECT * FROM users WHERE id = 1",
+    let mut runner = LoadTestRunner::new(&format!("sql_parse (n={count})"));
+    let queries = ["SELECT * FROM users WHERE id = 1",
         "INSERT INTO orders VALUES (1, 'widget', 100)",
         "SELECT name, COUNT(*) FROM users GROUP BY name",
         "UPDATE products SET price = 50 WHERE id = 3",
         "SELECT a.id, b.name FROM a JOIN b ON a.id = b.a_id WHERE a.active = true",
         "DELETE FROM logs WHERE created_at < 1000",
         "SELECT * FROM items ORDER BY price DESC LIMIT 10",
-        "CREATE TABLE IF NOT EXISTS temp (id INT, val TEXT)",
-    ];
+        "CREATE TABLE IF NOT EXISTS temp (id INT, val TEXT)"];
 
     runner.start();
     for i in 0..count {
@@ -58,7 +56,7 @@ fn insert_throughput(count: u64) {
     let (db, _dir) = make_db();
     exec(&db, "CREATE TABLE bench_insert (id INT, name TEXT, score INT)").unwrap();
 
-    let mut runner = LoadTestRunner::new(&format!("sql_insert (n={})", count));
+    let mut runner = LoadTestRunner::new(&format!("sql_insert (n={count})"));
 
     runner.start();
     for i in 0..count {
@@ -79,7 +77,7 @@ fn select_throughput(count: u64) {
         exec(&db, &format!("INSERT INTO bench_select VALUES ({}, 'item_{}', {})", i, i, i * 3)).unwrap();
     }
 
-    let mut runner = LoadTestRunner::new(&format!("sql_select_all (n={}, rows=100)", count));
+    let mut runner = LoadTestRunner::new(&format!("sql_select_all (n={count}, rows=100)"));
 
     runner.start();
     for _ in 0..count {
@@ -103,7 +101,7 @@ fn filtered_select(count: u64) {
         exec(&db, &format!("INSERT INTO bench_filter VALUES ({}, '{}', {})", i, cat, i * 5)).unwrap();
     }
 
-    let mut runner = LoadTestRunner::new(&format!("sql_filtered_select (n={}, rows=200)", count));
+    let mut runner = LoadTestRunner::new(&format!("sql_filtered_select (n={count}, rows=200)"));
 
     runner.start();
     for _ in 0..count {
@@ -129,7 +127,7 @@ fn aggregate_queries(count: u64) {
         exec(&db, &format!("INSERT INTO bench_agg VALUES ({}, '{}', {})", i, dept, 50000 + (i * 100))).unwrap();
     }
 
-    let mut runner = LoadTestRunner::new(&format!("sql_aggregate (n={}, rows=100)", count));
+    let mut runner = LoadTestRunner::new(&format!("sql_aggregate (n={count}, rows=100)"));
 
     runner.start();
     for _ in 0..count {
@@ -146,10 +144,10 @@ fn mixed_dml_workload(count: u64) {
     let (db, _dir) = make_db();
     exec(&db, "CREATE TABLE bench_mixed (id INT, status TEXT, count INT)").unwrap();
     for i in 0..50 {
-        exec(&db, &format!("INSERT INTO bench_mixed VALUES ({}, 'active', {})", i, i)).unwrap();
+        exec(&db, &format!("INSERT INTO bench_mixed VALUES ({i}, 'active', {i})")).unwrap();
     }
 
-    let mut runner = LoadTestRunner::new(&format!("sql_mixed_dml (n={})", count));
+    let mut runner = LoadTestRunner::new(&format!("sql_mixed_dml (n={count})"));
     let mut next_id = 50u64;
     let mut rng = 0xCAFEBABEu64;
 
@@ -160,14 +158,14 @@ fn mixed_dml_workload(count: u64) {
 
         let result = match rng % 4 {
             0 => {
-                let sql = format!("INSERT INTO bench_mixed VALUES ({}, 'active', {})", next_id, next_id);
+                let sql = format!("INSERT INTO bench_mixed VALUES ({next_id}, 'active', {next_id})");
                 next_id += 1;
                 exec(&db, &sql)
             }
             1 => exec(&db, "SELECT * FROM bench_mixed WHERE count > 25"),
             2 => {
                 let id = rng % next_id;
-                exec(&db, &format!("UPDATE bench_mixed SET status = 'updated' WHERE id = {}", id))
+                exec(&db, &format!("UPDATE bench_mixed SET status = 'updated' WHERE id = {id}"))
             }
             _ => exec(&db, "SELECT COUNT(*) FROM bench_mixed"),
         };

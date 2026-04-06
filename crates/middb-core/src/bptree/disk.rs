@@ -415,8 +415,7 @@ impl DiskBPTree {
         let magic = u64::from_le_bytes(buf[0..8].try_into().unwrap());
         if magic != META_MAGIC {
             return Err(Error::Corruption(format!(
-                "Invalid B+Tree meta page magic: {:#x}",
-                magic
+                "Invalid B+Tree meta page magic: {magic:#x}"
             )));
         }
         Ok(MetaPage {
@@ -491,21 +490,20 @@ mod tests {
     fn test_many_inserts_cause_splits() {
         let (mut tree, _temp) = create_tree();
         for i in 0..500u32 {
-            let key = format!("key{:05}", i);
-            let val = format!("val{:05}", i);
+            let key = format!("key{i:05}");
+            let val = format!("val{i:05}");
             tree.insert(key.into_bytes(), val.into_bytes()).unwrap();
         }
         assert_eq!(tree.len(), 500);
         assert!(tree.height() > 1);
 
         for i in 0..500u32 {
-            let key = format!("key{:05}", i);
-            let val = format!("val{:05}", i);
+            let key = format!("key{i:05}");
+            let val = format!("val{i:05}");
             assert_eq!(
                 tree.get(key.as_bytes()).unwrap(),
                 Some(val.into_bytes()),
-                "Missing key {}",
-                key
+                "Missing key {key}"
             );
         }
     }
@@ -514,8 +512,8 @@ mod tests {
     fn test_range_scan() {
         let (mut tree, _temp) = create_tree();
         for i in 0..100u32 {
-            let key = format!("k{:04}", i);
-            let val = format!("v{:04}", i);
+            let key = format!("k{i:04}");
+            let val = format!("v{i:04}");
             tree.insert(key.into_bytes(), val.into_bytes()).unwrap();
         }
 
@@ -531,7 +529,7 @@ mod tests {
         {
             let mut tree = DiskBPTree::create(temp.path()).unwrap();
             for i in 0..200u32 {
-                let key = format!("pk{:04}", i);
+                let key = format!("pk{i:04}");
                 tree.insert(key.into_bytes(), vec![i as u8; 32]).unwrap();
             }
             tree.flush().unwrap();
@@ -540,7 +538,7 @@ mod tests {
             let mut tree = DiskBPTree::open(temp.path()).unwrap();
             assert_eq!(tree.len(), 200);
             for i in 0..200u32 {
-                let key = format!("pk{:04}", i);
+                let key = format!("pk{i:04}");
                 assert!(tree.get(key.as_bytes()).unwrap().is_some());
             }
         }

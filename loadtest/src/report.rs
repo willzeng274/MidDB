@@ -22,8 +22,7 @@ impl LoadTestResult {
         println!("  {}", self.name);
         println!("    ops: {:>10}  |  elapsed: {:.2}s  |  throughput: {:.0} ops/s",
             self.total_ops, self.elapsed.as_secs_f64(), ops_per_sec);
-        println!("    latency (μs): mean={:.0}  p50={}  p95={}  p99={}  p99.9={}  max={}",
-            mean, p50, p95, p99, p999, max);
+        println!("    latency (μs): mean={mean:.0}  p50={p50}  p95={p95}  p99={p99}  p99.9={p999}  max={max}");
         if self.errors > 0 {
             println!("    errors: {}", self.errors);
         }

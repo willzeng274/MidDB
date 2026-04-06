@@ -63,7 +63,7 @@ pub struct Version {
 impl Version {
     pub fn new() -> Self {
         let levels = (0..MAX_LEVELS as u32)
-            .map(|i| LevelFiles::new(i))
+            .map(LevelFiles::new)
             .collect();
         Version { levels }
     }
@@ -150,6 +150,14 @@ impl VersionSet {
 
     pub fn next_file_id(&self) -> u64 {
         self.next_file_id.fetch_add(1, Ordering::SeqCst)
+    }
+
+    pub fn set_next_file_id(&self, id: u64) {
+        self.next_file_id.store(id, Ordering::SeqCst);
+    }
+
+    pub fn current_file_id(&self) -> u64 {
+        self.next_file_id.load(Ordering::SeqCst)
     }
 
     pub fn add_file(&mut self, level: Level, file: SSTableMetadata) {

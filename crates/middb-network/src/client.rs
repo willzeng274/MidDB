@@ -27,7 +27,7 @@ impl Client {
         let resp = self.send_request(Request::Get { key: key.to_vec() }).await?;
         match resp {
             Response::Value(value) => Ok(value),
-            Response::Error(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
+            Response::Error(e) => Err(io::Error::other(e)),
             _ => Err(io::Error::new(io::ErrorKind::InvalidData, "Unexpected response")),
         }
     }
@@ -38,7 +38,7 @@ impl Client {
         }).await?;
         match resp {
             Response::Ok => Ok(()),
-            Response::Error(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
+            Response::Error(e) => Err(io::Error::other(e)),
             _ => Err(io::Error::new(io::ErrorKind::InvalidData, "Unexpected response")),
         }
     }
@@ -47,7 +47,7 @@ impl Client {
         let resp = self.send_request(Request::Delete { key: key.to_vec() }).await?;
         match resp {
             Response::Ok => Ok(()),
-            Response::Error(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
+            Response::Error(e) => Err(io::Error::other(e)),
             _ => Err(io::Error::new(io::ErrorKind::InvalidData, "Unexpected response")),
         }
     }
@@ -56,7 +56,7 @@ impl Client {
         let resp = self.send_request(Request::BatchGet { keys }).await?;
         match resp {
             Response::Values(values) => Ok(values),
-            Response::Error(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
+            Response::Error(e) => Err(io::Error::other(e)),
             _ => Err(io::Error::new(io::ErrorKind::InvalidData, "Unexpected response")),
         }
     }
@@ -65,7 +65,7 @@ impl Client {
         let resp = self.send_request(Request::BatchPut { pairs }).await?;
         match resp {
             Response::BatchOk { count } => Ok(count),
-            Response::Error(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
+            Response::Error(e) => Err(io::Error::other(e)),
             _ => Err(io::Error::new(io::ErrorKind::InvalidData, "Unexpected response")),
         }
     }
@@ -75,7 +75,7 @@ impl Client {
         match resp {
             Response::QueryResult { columns, rows } => Ok(QueryResult { columns, rows }),
             Response::Ok => Ok(QueryResult { columns: vec![], rows: vec![] }),
-            Response::Error(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
+            Response::Error(e) => Err(io::Error::other(e)),
             _ => Err(io::Error::new(io::ErrorKind::InvalidData, "Unexpected response")),
         }
     }
@@ -84,7 +84,7 @@ impl Client {
         let resp = self.send_request(Request::BeginTxn).await?;
         match resp {
             Response::TxnStarted { txn_id } => Ok(txn_id),
-            Response::Error(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
+            Response::Error(e) => Err(io::Error::other(e)),
             _ => Err(io::Error::new(io::ErrorKind::InvalidData, "Unexpected response")),
         }
     }
@@ -93,7 +93,7 @@ impl Client {
         let resp = self.send_request(Request::CommitTxn { txn_id }).await?;
         match resp {
             Response::Ok => Ok(()),
-            Response::Error(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
+            Response::Error(e) => Err(io::Error::other(e)),
             _ => Err(io::Error::new(io::ErrorKind::InvalidData, "Unexpected response")),
         }
     }
@@ -102,7 +102,7 @@ impl Client {
         let resp = self.send_request(Request::AbortTxn { txn_id }).await?;
         match resp {
             Response::Ok => Ok(()),
-            Response::Error(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
+            Response::Error(e) => Err(io::Error::other(e)),
             _ => Err(io::Error::new(io::ErrorKind::InvalidData, "Unexpected response")),
         }
     }
@@ -111,7 +111,7 @@ impl Client {
         let resp = self.send_request(Request::TxnGet { txn_id, key: key.to_vec() }).await?;
         match resp {
             Response::Value(value) => Ok(value),
-            Response::Error(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
+            Response::Error(e) => Err(io::Error::other(e)),
             _ => Err(io::Error::new(io::ErrorKind::InvalidData, "Unexpected response")),
         }
     }
@@ -122,7 +122,7 @@ impl Client {
         }).await?;
         match resp {
             Response::Ok => Ok(()),
-            Response::Error(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
+            Response::Error(e) => Err(io::Error::other(e)),
             _ => Err(io::Error::new(io::ErrorKind::InvalidData, "Unexpected response")),
         }
     }
@@ -131,7 +131,7 @@ impl Client {
         let resp = self.send_request(Request::TxnDelete { txn_id, key: key.to_vec() }).await?;
         match resp {
             Response::Ok => Ok(()),
-            Response::Error(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
+            Response::Error(e) => Err(io::Error::other(e)),
             _ => Err(io::Error::new(io::ErrorKind::InvalidData, "Unexpected response")),
         }
     }
@@ -141,6 +141,57 @@ impl Client {
         match resp {
             Response::Pong => Ok(()),
             _ => Err(io::Error::new(io::ErrorKind::InvalidData, "Expected pong")),
+        }
+    }
+
+    pub async fn replicate_write(&mut self, key: &[u8], value: &[u8]) -> io::Result<()> {
+        let resp = self.send_request(Request::ReplicateWrite {
+            key: key.to_vec(), value: value.to_vec(),
+        }).await?;
+        match resp {
+            Response::Ok => Ok(()),
+            Response::Error(e) => Err(io::Error::other(e)),
+            _ => Err(io::Error::new(io::ErrorKind::InvalidData, "Unexpected response")),
+        }
+    }
+
+    pub async fn replicate_delete(&mut self, key: &[u8]) -> io::Result<()> {
+        let resp = self.send_request(Request::ReplicateDelete { key: key.to_vec() }).await?;
+        match resp {
+            Response::Ok => Ok(()),
+            Response::Error(e) => Err(io::Error::other(e)),
+            _ => Err(io::Error::new(io::ErrorKind::InvalidData, "Unexpected response")),
+        }
+    }
+
+    pub async fn heartbeat(&mut self, node_id: &str, ring_version: u64) -> io::Result<()> {
+        let resp = self.send_request(Request::Heartbeat {
+            node_id: node_id.to_string(), ring_version,
+        }).await?;
+        match resp {
+            Response::HeartbeatAck => Ok(()),
+            Response::Error(e) => Err(io::Error::other(e)),
+            _ => Err(io::Error::new(io::ErrorKind::InvalidData, "Unexpected response")),
+        }
+    }
+
+    pub async fn join_cluster(&mut self, node_addr: &str) -> io::Result<(Vec<String>, u64)> {
+        let resp = self.send_request(Request::JoinCluster {
+            node_addr: node_addr.to_string(),
+        }).await?;
+        match resp {
+            Response::ClusterState { nodes, ring_version } => Ok((nodes, ring_version)),
+            Response::Error(e) => Err(io::Error::other(e)),
+            _ => Err(io::Error::new(io::ErrorKind::InvalidData, "Unexpected response")),
+        }
+    }
+
+    pub async fn get_cluster_state(&mut self) -> io::Result<(Vec<String>, u64)> {
+        let resp = self.send_request(Request::GetClusterState).await?;
+        match resp {
+            Response::ClusterState { nodes, ring_version } => Ok((nodes, ring_version)),
+            Response::Error(e) => Err(io::Error::other(e)),
+            _ => Err(io::Error::new(io::ErrorKind::InvalidData, "Unexpected response")),
         }
     }
 

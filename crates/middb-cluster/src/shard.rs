@@ -78,7 +78,7 @@ mod tests {
         new_ring.add_node("node2");
         new_ring.add_node("node3");
 
-        let keys: Vec<Vec<u8>> = (0..100).map(|i| format!("key_{}", i).into_bytes()).collect();
+        let keys: Vec<Vec<u8>> = (0..100).map(|i| format!("key_{i}").into_bytes()).collect();
         let plan = compute_rebalance_plan(&old_ring, &new_ring, &keys);
 
         assert!(!plan.migrations.is_empty());
@@ -93,7 +93,7 @@ mod tests {
         ring.add_node("node1");
         ring.add_node("node2");
 
-        let keys: Vec<Vec<u8>> = (0..100).map(|i| format!("key_{}", i).into_bytes()).collect();
+        let keys: Vec<Vec<u8>> = (0..100).map(|i| format!("key_{i}").into_bytes()).collect();
         let plan = compute_rebalance_plan(&ring, &ring, &keys);
 
         assert!(plan.migrations.is_empty());
@@ -110,7 +110,7 @@ mod tests {
         new_ring.add_node("node1");
         new_ring.add_node("node2");
 
-        let keys: Vec<Vec<u8>> = (0..100).map(|i| format!("key_{}", i).into_bytes()).collect();
+        let keys: Vec<Vec<u8>> = (0..100).map(|i| format!("key_{i}").into_bytes()).collect();
         let plan = compute_rebalance_plan(&old_ring, &new_ring, &keys);
 
         assert!(!plan.migrations.is_empty());

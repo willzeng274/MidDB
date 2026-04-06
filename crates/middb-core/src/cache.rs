@@ -44,7 +44,6 @@ impl BlockCache {
     }
 
     fn shard_index(file_id: u64, offset: u64) -> usize {
-        // Simple hash to distribute across shards
         let h = file_id.wrapping_mul(0x9E3779B97F4A7C15) ^ offset.wrapping_mul(0x517CC1B727220A95);
         (h as usize) % NUM_SHARDS
     }
@@ -73,7 +72,6 @@ impl BlockCache {
             return Arc::clone(&shard.map[&key].block);
         }
 
-        // Evict until we have room
         while shard.current_size + size > shard.capacity && shard.tail.is_some() {
             shard.evict_lru();
         }
@@ -209,7 +207,7 @@ mod tests {
             cache.insert(i, 0, Block::new());
         }
         for i in 0..32u64 {
-            assert!(cache.get(i, 0).is_some(), "missing block for file_id={}", i);
+            assert!(cache.get(i, 0).is_some(), "missing block for file_id={i}");
         }
     }
 }

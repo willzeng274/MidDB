@@ -10,6 +10,7 @@ repository.workspace = true
 middb-core = { path = "../middb-core" }
 middb-network = { path = "../middb-network" }
 middb-query = { path = "../middb-query" }
+middb-cluster = { path = "../middb-cluster" }
 tokio.workspace = true
 clap = { version = "4.5", features = ["derive"] }
 rustyline = "14.0"

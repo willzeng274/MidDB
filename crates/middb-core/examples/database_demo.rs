@@ -14,10 +14,9 @@ fn main() {
     
     println!("Inserting 100 entries");
     for i in 0..100 {
-        let key = format!("user_{:04}", i);
+        let key = format!("user_{i:04}");
         let value = format!(
-            "{{\"id\":{},\"name\":\"User {}\",\"email\":\"user{}@example.com\"}}",
-            i, i, i
+            "{{\"id\":{i},\"name\":\"User {i}\",\"email\":\"user{i}@example.com\"}}"
         );
         db.put(key.as_bytes().to_vec(), value.as_bytes().to_vec())
             .expect("Failed to put");
@@ -37,8 +36,8 @@ fn main() {
                 let value_str = String::from_utf8_lossy(&value);
                 println!("  {} => {} bytes", key, value_str.len());
             }
-            Ok(None) => println!("  {} => Not found", key),
-            Err(e) => println!("  {} => Error: {}", key, e),
+            Ok(None) => println!("  {key} => Not found"),
+            Err(e) => println!("  {key} => Error: {e}"),
         }
     }
     
@@ -53,13 +52,13 @@ fn main() {
     match db.get(&b"user_0025".to_vec()) {
         Ok(None) => println!("Key deleted successfully"),
         Ok(Some(_)) => println!("ERROR: Key still exists"),
-        Err(e) => println!("Error: {}", e),
+        Err(e) => println!("Error: {e}"),
     }
     
     println!("\nWriting more data to trigger flush");
     for i in 100..200 {
-        let key = format!("batch_{:04}", i);
-        let value = format!("value_{}", i).repeat(100);
+        let key = format!("batch_{i:04}");
+        let value = format!("value_{i}").repeat(100);
         db.put(key.as_bytes().to_vec(), value.as_bytes().to_vec())
             .expect("Failed to put");
     }

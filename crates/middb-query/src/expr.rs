@@ -132,15 +132,15 @@ pub enum AggregateFunc {
 impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Expr::Literal(v) => write!(f, "{:?}", v),
-            Expr::Column(name) => write!(f, "{}", name),
+            Expr::Literal(v) => write!(f, "{v:?}"),
+            Expr::Column(name) => write!(f, "{name}"),
             Expr::BinaryOp { op, left, right } => {
-                write!(f, "({} {:?} {})", left, op, right)
+                write!(f, "({left} {op:?} {right})")
             }
-            Expr::Aggregate { func, arg } => write!(f, "{:?}({})", func, arg),
-            Expr::IsNull(e) => write!(f, "({} IS NULL)", e),
-            Expr::IsNotNull(e) => write!(f, "({} IS NOT NULL)", e),
-            Expr::UnaryNot(e) => write!(f, "(NOT {})", e),
+            Expr::Aggregate { func, arg } => write!(f, "{func:?}({arg})"),
+            Expr::IsNull(e) => write!(f, "({e} IS NULL)"),
+            Expr::IsNotNull(e) => write!(f, "({e} IS NOT NULL)"),
+            Expr::UnaryNot(e) => write!(f, "(NOT {e})"),
             Expr::Wildcard => write!(f, "*"),
             Expr::InList { expr, list, negated } => {
                 write!(f, "({} {}IN ({:?}))", expr, if *negated { "NOT " } else { "" }, list)

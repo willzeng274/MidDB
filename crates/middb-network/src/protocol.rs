@@ -29,6 +29,15 @@ pub enum Request {
     TxnPut { txn_id: u64, key: Vec<u8>, value: Vec<u8> },
     TxnDelete { txn_id: u64, key: Vec<u8> },
     Ping,
+
+    // Cluster-internal: replica write/delete (node-to-node)
+    ReplicateWrite { key: Vec<u8>, value: Vec<u8> },
+    ReplicateDelete { key: Vec<u8> },
+
+    // Cluster membership
+    Heartbeat { node_id: String, ring_version: u64 },
+    JoinCluster { node_addr: String },
+    GetClusterState,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,6 +50,10 @@ pub enum Response {
     QueryResult { columns: Vec<String>, rows: Vec<Vec<Option<String>>> },
     Error(String),
     Pong,
+
+    // Cluster responses
+    HeartbeatAck,
+    ClusterState { nodes: Vec<String>, ring_version: u64 },
 }
 
 impl Frame {

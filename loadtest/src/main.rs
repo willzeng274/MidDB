@@ -1,3 +1,4 @@
+mod cluster;
 mod engine;
 mod network;
 mod query;
@@ -20,6 +21,10 @@ async fn main() {
     println!("\n▶ Network Tests");
     println!("───────────────────────────────────────────────────────");
     network::run_all().await;
+
+    println!("\n▶ Cluster Tests (3-node, RF=3, W=2, R=1)");
+    println!("───────────────────────────────────────────────────────");
+    cluster::run_all().await;
 
     println!("\n═══════════════════════════════════════════════════════");
     println!("  Load tests complete");

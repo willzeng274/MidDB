@@ -33,7 +33,7 @@ impl ConsistentHashRing {
         }
         self.nodes.push(node.to_string());
         for i in 0..self.virtual_nodes {
-            let hash = Self::hash_key(&format!("{}:{}", node, i));
+            let hash = Self::hash_key(&format!("{node}:{i}"));
             self.ring.insert(hash, node.to_string());
         }
     }
@@ -41,7 +41,7 @@ impl ConsistentHashRing {
     pub fn remove_node(&mut self, node: &str) {
         self.nodes.retain(|n| n != node);
         for i in 0..self.virtual_nodes {
-            let hash = Self::hash_key(&format!("{}:{}", node, i));
+            let hash = Self::hash_key(&format!("{node}:{i}"));
             self.ring.remove(&hash);
         }
     }
@@ -167,7 +167,7 @@ mod tests {
         ring.add_node("node2");
         ring.add_node("node3");
 
-        let keys: Vec<Vec<u8>> = (0..1000).map(|i| format!("key_{}", i).into_bytes()).collect();
+        let keys: Vec<Vec<u8>> = (0..1000).map(|i| format!("key_{i}").into_bytes()).collect();
         let before: Vec<String> = keys.iter()
             .map(|k| ring.get_node(k).unwrap().to_string())
             .collect();
@@ -183,7 +183,7 @@ mod tests {
         }
 
         // Removing 1 of 3 nodes should move roughly 1/3 of keys
-        assert!(changed < 500, "Too many keys moved: {}", changed);
+        assert!(changed < 500, "Too many keys moved: {changed}");
     }
 
     #[test]
@@ -195,7 +195,7 @@ mod tests {
 
         let mut counts = std::collections::HashMap::new();
         for i in 0..3000 {
-            let key = format!("key_{}", i);
+            let key = format!("key_{i}");
             let node = ring.get_node(key.as_bytes()).unwrap();
             *counts.entry(node.to_string()).or_insert(0) += 1;
         }

@@ -32,7 +32,7 @@ async fn main() {
         (b"batch_b".to_vec(), b"2".to_vec()),
         (b"batch_c".to_vec(), b"3".to_vec()),
     ]).await.unwrap();
-    println!("Batch put {} keys", count);
+    println!("Batch put {count} keys");
 
     let values = client.batch_get(vec![
         b"batch_a".to_vec(), b"batch_b".to_vec(), b"missing".to_vec(),

@@ -52,7 +52,7 @@ fn main() {
                 }
             }
         }
-        Err(e) => println!("Error: {}", e),
+        Err(e) => println!("Error: {e}"),
     }
     
     println!("\nQuery: SELECT * FROM products WHERE price >= 50 AND price <= 100");
@@ -82,7 +82,7 @@ fn main() {
                 }
             }
         }
-        Err(e) => println!("Error: {}", e),
+        Err(e) => println!("Error: {e}"),
     }
     
     println!("\nQuery engine with execution complete");

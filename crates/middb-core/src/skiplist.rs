@@ -141,7 +141,7 @@ impl<K: Ord + Default, V: Default> SkipList<K, V> {
 
     pub fn iter(&self) -> SkipListIter<'_, K, V> {
         SkipListIter {
-            current: self.head.forward[0].as_ref().map(|n| &**n),
+            current: self.head.forward[0].as_deref(),
         }
     }
 
@@ -158,7 +158,7 @@ impl<K: Ord + Default, V: Default> SkipList<K, V> {
             }
         }
 
-        let start_node = current.forward[0].as_ref().map(|n| &**n);
+        let start_node = current.forward[0].as_deref();
 
         RangeIter {
             current: start_node,
@@ -211,7 +211,7 @@ impl<'a, K, V> Iterator for SkipListIter<'a, K, V> {
 
     fn next(&mut self) -> Option<Self::Item> {
         self.current.map(|node| {
-            self.current = node.forward[0].as_ref().map(|n| &**n);
+            self.current = node.forward[0].as_deref();
             (&node.key, &node.value)
         })
     }
@@ -228,7 +228,7 @@ impl<'a, K: Ord, V> Iterator for RangeIter<'a, K, V> {
     fn next(&mut self) -> Option<Self::Item> {
         self.current.and_then(|node| {
             if node.key < *self.end {
-                self.current = node.forward[0].as_ref().map(|n| &**n);
+                self.current = node.forward[0].as_deref();
                 Some((&node.key, &node.value))
             } else {
                 None
@@ -240,7 +240,7 @@ impl<'a, K: Ord, V> Iterator for RangeIter<'a, K, V> {
 fn rand() -> f64 {
     use std::cell::Cell;
     thread_local! {
-        static SEED: Cell<u64> = Cell::new(12345);
+        static SEED: Cell<u64> = const { Cell::new(12345) };
     }
 
     SEED.with(|seed| {

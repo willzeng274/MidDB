@@ -2,11 +2,12 @@ use super::picker::{CompactionPicker, CompactionTask};
 use super::version::VersionSet;
 use crate::cache::BlockCache;
 use crate::config::Config;
+use crate::manifest::{self, ManifestFileEntry, ManifestRecord};
 use crate::sstable::{MergeIterator, SSTableReader, SSTableWriter};
 use crate::Result;
 use std::collections::HashMap;
 use std::fs;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -24,11 +25,21 @@ impl CompactionWorker {
         config: Config,
         block_cache: Arc<BlockCache>,
     ) -> Self {
+        Self::start_with_sequence(version_set, readers, config, block_cache, Arc::new(AtomicU64::new(0)))
+    }
+
+    pub fn start_with_sequence(
+        version_set: Arc<RwLock<VersionSet>>,
+        readers: Arc<RwLock<HashMap<u64, SSTableReader>>>,
+        config: Config,
+        block_cache: Arc<BlockCache>,
+        sequence: Arc<AtomicU64>,
+    ) -> Self {
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_clone = Arc::clone(&shutdown);
 
         let handle = thread::spawn(move || {
-            Self::run_loop(version_set, readers, config, shutdown_clone, block_cache);
+            Self::run_loop(version_set, readers, config, shutdown_clone, block_cache, sequence);
         });
 
         CompactionWorker {
@@ -50,6 +61,7 @@ impl CompactionWorker {
         config: Config,
         shutdown: Arc<AtomicBool>,
         block_cache: Arc<BlockCache>,
+        sequence: Arc<AtomicU64>,
     ) {
         let picker = CompactionPicker::new(&config);
 
@@ -67,7 +79,7 @@ impl CompactionWorker {
                 match task {
                     Some(task) => {
                         if let Err(_e) = Self::run_compaction(
-                            &task, &version_set, &readers, &config, &block_cache,
+                            &task, &version_set, &readers, &config, &block_cache, &sequence,
                         ) {
                             // Compaction failure is non-fatal — will retry on next cycle.
                             // Common cause: stale task referencing files from a concurrent flush.
@@ -80,9 +92,27 @@ impl CompactionWorker {
                 }
             }
 
-            // Only sleep when there's no compaction work pending
             thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    fn persist_manifest_static(
+        version_set: &Arc<RwLock<VersionSet>>,
+        config: &Config,
+        sequence: &Arc<AtomicU64>,
+    ) -> Result<()> {
+        let vs = version_set.read();
+        let version = vs.current();
+        let files: Vec<ManifestFileEntry> = version.all_files()
+            .map(ManifestFileEntry::from_metadata)
+            .collect();
+
+        let record = ManifestRecord {
+            next_file_id: vs.current_file_id(),
+            sequence_number: sequence.load(Ordering::SeqCst),
+            files,
+        };
+        manifest::write_manifest(&config.data_dir, &record)
     }
 
     fn run_compaction(
@@ -91,16 +121,16 @@ impl CompactionWorker {
         readers: &Arc<RwLock<HashMap<u64, SSTableReader>>>,
         config: &Config,
         block_cache: &Arc<BlockCache>,
+        sequence: &Arc<AtomicU64>,
     ) -> Result<()> {
         let file_id = {
             let vs = version_set.read();
             vs.next_file_id()
         };
 
-        let output_path = config.data_dir.join(format!("sst_{:08}.sst", file_id));
+        let output_path = config.data_dir.join(format!("sst_{file_id:08}.sst"));
 
-        // Verify all input files exist before proceeding
-        if !output_path.parent().map_or(false, |p| p.exists()) {
+        if !output_path.parent().is_some_and(|p| p.exists()) {
             return Ok(()); // data directory gone (DB shutting down)
         }
 
@@ -108,7 +138,14 @@ impl CompactionWorker {
             let readers_guard = readers.read();
             let mut iters = Vec::new();
 
-            for file in task.all_input_files() {
+            // Input files are ordered oldest→newest. Reverse so that newer files
+            // get lower iterator indices. MergeIterator gives priority to the
+            // lowest index on key ties, so this ensures the newest value wins.
+            let ordered_files: Vec<_> = task.input_files.iter().rev()
+                .chain(task.target_files.iter())
+                .collect();
+
+            for file in &ordered_files {
                 match readers_guard.get(&file.file_id) {
                     Some(reader) => iters.push(reader.iter()?),
                     None => return Ok(()), // stale task — file already compacted away
@@ -120,10 +157,23 @@ impl CompactionWorker {
         let mut merge_iter = MergeIterator::new(iters);
         merge_iter.seek_to_first()?;
 
-        let mut writer = SSTableWriter::create(&output_path, config.block_size)?;
+        let mut writer = SSTableWriter::create_with_options(
+            &output_path, config.block_size, config.bloom_bits_per_key, config.compression_type,
+        )?;
+
+        // Only drop tombstones when compacting to the maximum level (6).
+        // This avoids a TOCTOU race: a concurrent flush could add files to a
+        // lower level between our check and the tombstone drop decision.
+        // At level 6 there's nothing below by definition, so it's always safe.
+        let is_bottom_level = task.output_level >= 6;
 
         while merge_iter.valid() {
             if let (Some(key), Some(value)) = (merge_iter.key(), merge_iter.value()) {
+                let is_tombstone = value.len() == 1 && value[0] == 0x02;
+                if is_tombstone && is_bottom_level {
+                    merge_iter.next()?;
+                    continue;
+                }
                 writer.add(key, value)?;
             }
             merge_iter.next()?;
@@ -144,6 +194,9 @@ impl CompactionWorker {
             let mut vs = version_set.write();
             vs.apply_edit(edit);
         }
+
+        // Persist manifest before deleting old files — crash safety
+        Self::persist_manifest_static(version_set, config, sequence)?;
 
         {
             let mut readers_guard = readers.write();
@@ -206,7 +259,8 @@ impl CompactionRunner {
                     &self.version_set,
                     &self.readers,
                     &self.config,
-                    &Arc::new(crate::cache::BlockCache::new(0)), // test-only, no cache
+                    &Arc::new(crate::cache::BlockCache::new(0)),
+                    &Arc::new(AtomicU64::new(0)),
                 )?;
                 Ok(true)
             }
@@ -223,7 +277,7 @@ mod tests {
     use tempfile::TempDir;
 
     fn setup_test_sstable(dir: &TempDir, id: u64, data: &[(Vec<u8>, Vec<u8>)]) -> SSTableMetadata {
-        let path = dir.path().join(format!("sst_{:08}.sst", id));
+        let path = dir.path().join(format!("sst_{id:08}.sst"));
         let mut writer = SSTableWriter::create(&path, 4096).unwrap();
 
         for (k, v) in data {

@@ -9,7 +9,7 @@ pub struct SqlParser;
 impl SqlParser {
     pub fn parse(sql: &str) -> Result<LogicalPlan, String> {
         let dialect = GenericDialect {};
-        let statements = Parser::parse_sql(&dialect, sql).map_err(|e| format!("Parse error: {}", e))?;
+        let statements = Parser::parse_sql(&dialect, sql).map_err(|e| format!("Parse error: {e}"))?;
 
         if statements.is_empty() {
             return Err("Empty SQL statement".into());
@@ -33,7 +33,7 @@ impl SqlParser {
             Statement::Drop { object_type, names, if_exists, .. } => {
                 Self::convert_drop(object_type, names, if_exists)
             }
-            _ => Err(format!("Unsupported statement type")),
+            _ => Err("Unsupported statement type".to_string()),
         }
     }
 
@@ -79,7 +79,7 @@ impl SqlParser {
                 match item {
                     ast::SelectItem::UnnamedExpr(expr) => {
                         if let Some((func, arg)) = Self::extract_aggregate(expr) {
-                            let alias = format!("agg_{}", i);
+                            let alias = format!("agg_{i}");
                             aggregates.push((func, arg, alias.clone()));
                             projections.push(Expr::Column(alias));
                         } else {
@@ -314,7 +314,7 @@ impl SqlParser {
             }
             ast::Expr::Function(func) => Self::convert_function(func),
             ast::Expr::Nested(inner) => Self::convert_expr(*inner),
-            _ => Err(format!("Unsupported expression: {:?}", expr)),
+            _ => Err(format!("Unsupported expression: {expr:?}")),
         }
     }
 
@@ -326,7 +326,7 @@ impl SqlParser {
                 } else if let Ok(f) = n.parse::<f64>() {
                     Ok(Expr::Literal(Value::Float(f)))
                 } else {
-                    Err(format!("Invalid number: {}", n))
+                    Err(format!("Invalid number: {n}"))
                 }
             }
             ast::Value::SingleQuotedString(s) | ast::Value::DoubleQuotedString(s) => {
@@ -334,7 +334,7 @@ impl SqlParser {
             }
             ast::Value::Boolean(b) => Ok(Expr::Literal(Value::Bool(b))),
             ast::Value::Null => Ok(Expr::Literal(Value::Null)),
-            _ => Err(format!("Unsupported value type")),
+            _ => Err("Unsupported value type".to_string()),
         }
     }
 
@@ -353,7 +353,7 @@ impl SqlParser {
             ast::BinaryOperator::Multiply => Ok(BinaryOperator::Mul),
             ast::BinaryOperator::Divide => Ok(BinaryOperator::Div),
             ast::BinaryOperator::Modulo => Ok(BinaryOperator::Mod),
-            _ => Err(format!("Unsupported binary operator: {:?}", op)),
+            _ => Err(format!("Unsupported binary operator: {op:?}")),
         }
     }
 
@@ -365,7 +365,7 @@ impl SqlParser {
             "AVG" => AggregateFunc::Avg,
             "MIN" => AggregateFunc::Min,
             "MAX" => AggregateFunc::Max,
-            _ => return Err(format!("Unknown function: {}", name)),
+            _ => return Err(format!("Unknown function: {name}")),
         };
 
         let args = match func.args {
@@ -575,7 +575,7 @@ impl SqlParser {
             ast::Expr::Value(val) => match val {
                 ast::Value::Number(n, _) => n
                     .parse::<usize>()
-                    .map_err(|_| format!("Expected integer, got: {}", n)),
+                    .map_err(|_| format!("Expected integer, got: {n}")),
                 _ => Err("Expected integer for LIMIT/OFFSET".into()),
             },
             _ => Err("Expected literal for LIMIT/OFFSET".into()),
@@ -641,7 +641,7 @@ mod tests {
                 assert!(matches!(*input, LogicalPlan::Aggregate { .. }));
                 assert_eq!(columns.len(), 1);
             }
-            _ => panic!("Expected Project over Aggregate, got: {:?}", plan),
+            _ => panic!("Expected Project over Aggregate, got: {plan:?}"),
         }
     }
 

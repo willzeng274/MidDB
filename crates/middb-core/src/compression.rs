@@ -2,17 +2,14 @@ use crate::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
+#[derive(Default)]
 pub enum CompressionType {
+    #[default]
     None = 0,
     Lz4 = 1,
     Snappy = 2,
 }
 
-impl Default for CompressionType {
-    fn default() -> Self {
-        CompressionType::None
-    }
-}
 
 impl CompressionType {
     pub fn from_u8(value: u8) -> Result<Self> {
@@ -21,8 +18,7 @@ impl CompressionType {
             1 => Ok(CompressionType::Lz4),
             2 => Ok(CompressionType::Snappy),
             _ => Err(Error::Corruption(format!(
-                "Unknown compression type: {}",
-                value
+                "Unknown compression type: {value}"
             ))),
         }
     }
@@ -75,7 +71,7 @@ pub fn decompress(data: &[u8]) -> Result<Vec<u8>> {
         }
         CompressionType::Lz4 => {
             let decompressed = lz4_flex::decompress_size_prepended(payload)
-                .map_err(|e| Error::Corruption(format!("LZ4 decompression failed: {}", e)))?;
+                .map_err(|e| Error::Corruption(format!("LZ4 decompression failed: {e}")))?;
             if decompressed.len() != uncompressed_size {
                 return Err(Error::Corruption("LZ4 uncompressed size mismatch".into()));
             }
@@ -85,7 +81,7 @@ pub fn decompress(data: &[u8]) -> Result<Vec<u8>> {
             let mut decoder = snap::raw::Decoder::new();
             let decompressed = decoder
                 .decompress_vec(payload)
-                .map_err(|e| Error::Corruption(format!("Snappy decompression failed: {}", e)))?;
+                .map_err(|e| Error::Corruption(format!("Snappy decompression failed: {e}")))?;
             if decompressed.len() != uncompressed_size {
                 return Err(Error::Corruption(
                     "Snappy uncompressed size mismatch".into(),

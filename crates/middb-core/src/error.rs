@@ -19,15 +19,15 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::Io(e) => write!(f, "I/O error: {}", e),
-            Error::Serialization(msg) => write!(f, "Serialization error: {}", msg),
+            Error::Io(e) => write!(f, "I/O error: {e}"),
+            Error::Serialization(msg) => write!(f, "Serialization error: {msg}"),
             Error::KeyNotFound => write!(f, "Key not found"),
             Error::TransactionConflict => write!(f, "Transaction conflict"),
             Error::StorageFull => write!(f, "Storage full"),
-            Error::Corruption(msg) => write!(f, "Data corruption: {}", msg),
-            Error::InvalidConfig(msg) => write!(f, "Invalid configuration: {}", msg),
-            Error::InvalidArgument(msg) => write!(f, "Invalid argument: {}", msg),
-            Error::Internal(msg) => write!(f, "Internal error: {}", msg),
+            Error::Corruption(msg) => write!(f, "Data corruption: {msg}"),
+            Error::InvalidConfig(msg) => write!(f, "Invalid configuration: {msg}"),
+            Error::InvalidArgument(msg) => write!(f, "Invalid argument: {msg}"),
+            Error::Internal(msg) => write!(f, "Internal error: {msg}"),
         }
     }
 }

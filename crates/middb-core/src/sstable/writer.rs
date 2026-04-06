@@ -64,7 +64,6 @@ impl SSTableWriter {
     pub fn add(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
         assert!(!key.is_empty(), "Key cannot be empty");
         
-        // Track smallest and largest keys
         if self.smallest_key.is_none() {
             self.smallest_key = Some(key.to_vec());
         }
@@ -109,7 +108,8 @@ impl SSTableWriter {
         self.offset += FOOTER_SIZE as u64;
         
         self.file.flush()?;
-        
+        self.file.get_mut().sync_all()?;
+
         Ok(SSTableMetadata::new(
             file_id,
             self.offset,
@@ -133,7 +133,6 @@ impl SSTableWriter {
         let last_key = self.largest_key.clone().unwrap_or_default();
         let handle = self.write_block(&block)?;
         
-        // Save pending index entry
         self.pending_index_entry = Some((last_key, handle));
         
         Ok(())
@@ -221,7 +220,6 @@ mod tests {
         
         let mut writer = SSTableWriter::create(path, 4096).unwrap();
         
-        // Add some key-value pairs
         writer.add(b"apple", b"red").unwrap();
         writer.add(b"banana", b"yellow").unwrap();
         writer.add(b"cherry", b"red").unwrap();

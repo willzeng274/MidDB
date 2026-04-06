@@ -12,6 +12,10 @@ middb-network = { path = "../middb-network" }
 tokio.workspace = true
 serde.workspace = true
 bincode.workspace = true
+futures = "0.3"
 
 [dev-dependencies]
 tempfile = "3.0"
+tokio = { version = "1", features = ["full", "test-util"] }
+middb-core = { path = "../middb-core" }
+middb-network = { path = "../middb-network" }

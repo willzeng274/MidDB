@@ -67,7 +67,6 @@ impl<K: Ord, V> MemTable<K, V> {
         let value_size = value.as_ref().len();
         let new_entry_size = key_size + value_size + NODE_OVERHEAD;
 
-        // Subtract old entry size if overwriting
         if let Some(old_entry) = self.data.get(&key) {
             let old_size = key_size + NODE_OVERHEAD + match old_entry {
                 ValueEntry::Value(v) => v.as_ref().len(),
@@ -98,7 +97,6 @@ impl<K: Ord, V> MemTable<K, V> {
         let key_size = key.as_ref().len();
         let new_entry_size = key_size + NODE_OVERHEAD;
 
-        // Subtract old entry size if overwriting
         if let Some(old_entry) = self.data.get(&key) {
             let old_size = key_size + NODE_OVERHEAD + match old_entry {
                 ValueEntry::Value(v) => v.as_ref().len(),
@@ -224,7 +222,6 @@ impl<K: Ord, V> ShardedMemTable<K, V> {
 
         let mut shard = self.shards[shard_idx].write();
 
-        // Subtract old entry size if overwriting
         if let Some(old_entry) = shard.get(&key) {
             let old_size = key_size + NODE_OVERHEAD + match old_entry {
                 ValueEntry::Value(v) => v.as_ref().len(),
@@ -254,18 +251,19 @@ impl<K: Ord, V> ShardedMemTable<K, V> {
         }
     }
 
-    /// Returns true if key exists as a tombstone (needed for get path to distinguish
-    /// "not found" from "deleted").
-    pub fn get_entry(&self, key: &K) -> Option<bool>
+    /// Returns None (not in memtable), Some(None) (tombstone), or Some(Some(value)).
+    /// Single shard lock acquisition for the entire lookup.
+    pub fn get_with_tombstone(&self, key: &K) -> Option<Option<V>>
     where
         K: AsRef<[u8]>,
+        V: Clone,
     {
         let shard_idx = Self::shard_index(key.as_ref());
         let shard = self.shards[shard_idx].read();
         match shard.get(key) {
-            Some(ValueEntry::Value(_)) => Some(true),   // exists as value
-            Some(ValueEntry::Tombstone) => Some(false),  // exists as tombstone
-            None => None,                                 // not found
+            Some(ValueEntry::Value(v)) => Some(Some(v.clone())),
+            Some(ValueEntry::Tombstone) => Some(None),
+            None => None,
         }
     }
 
@@ -280,7 +278,6 @@ impl<K: Ord, V> ShardedMemTable<K, V> {
 
         let mut shard = self.shards[shard_idx].write();
 
-        // Subtract old entry size if overwriting
         if let Some(old_entry) = shard.get(&key) {
             let old_size = key_size + NODE_OVERHEAD + match old_entry {
                 ValueEntry::Value(v) => v.as_ref().len(),
@@ -295,7 +292,6 @@ impl<K: Ord, V> ShardedMemTable<K, V> {
         Ok(())
     }
 
-    /// Collect sorted entries from all shards for range queries.
     pub fn range(&self, start: &K, end: &K) -> Vec<(K, V)>
     where
         K: Clone,
@@ -314,6 +310,27 @@ impl<K: Ord, V> ShardedMemTable<K, V> {
         results
     }
 
+    /// Like `range()` but includes tombstones so callers can correctly mask
+    /// deleted keys from lower layers (immutable memtable, SSTables).
+    pub fn range_with_tombstones(&self, start: &K, end: &K) -> Vec<(K, Option<V>)>
+    where
+        K: Clone,
+        V: Clone,
+    {
+        let mut results = Vec::new();
+        for shard in &self.shards {
+            let guard = shard.read();
+            for (k, entry) in guard.range(start..end) {
+                match entry {
+                    ValueEntry::Value(v) => results.push((k.clone(), Some(v.clone()))),
+                    ValueEntry::Tombstone => results.push((k.clone(), None)),
+                }
+            }
+        }
+        results.sort_by(|(a, _), (b, _)| a.cmp(b));
+        results
+    }
+
     pub fn flush_to_sstable<P: AsRef<Path>>(
         &self,
         path: P,
@@ -325,7 +342,21 @@ impl<K: Ord, V> ShardedMemTable<K, V> {
         K: AsRef<[u8]> + Clone,
         V: AsRef<[u8]> + Clone,
     {
-        // Collect all entries from all shards, then sort
+        self.flush_to_sstable_with_compression(path, file_id, level, block_size, crate::compression::CompressionType::None)
+    }
+
+    pub fn flush_to_sstable_with_compression<P: AsRef<Path>>(
+        &self,
+        path: P,
+        file_id: u64,
+        level: u32,
+        block_size: usize,
+        compression: crate::compression::CompressionType,
+    ) -> Result<crate::sstable::SSTableMetadata>
+    where
+        K: AsRef<[u8]> + Clone,
+        V: AsRef<[u8]> + Clone,
+    {
         let mut all_entries: Vec<(K, ValueEntry<V>)> = Vec::new();
         for shard in &self.shards {
             let guard = shard.read();
@@ -335,7 +366,7 @@ impl<K: Ord, V> ShardedMemTable<K, V> {
         }
         all_entries.sort_by(|(a, _), (b, _)| a.cmp(b));
 
-        let mut writer = SSTableWriter::create(path, block_size)?;
+        let mut writer = SSTableWriter::create_with_options(path, block_size, 15, compression)?;
 
         for (key, entry) in &all_entries {
             let key_bytes: &[u8] = key.as_ref();
@@ -408,7 +439,7 @@ mod tests {
 
         // Add enough data to exceed threshold
         for i in 0..10 {
-            mt.put(format!("key{}", i), format!("value{}", i)).unwrap();
+            mt.put(format!("key{i}"), format!("value{i}")).unwrap();
         }
 
         assert!(mt.should_flush());
@@ -429,7 +460,7 @@ mod tests {
     fn test_range_query() {
         let mut mt = MemTable::new();
         for i in 0..10 {
-            mt.put(format!("key{}", i), format!("value{}", i * 10)).unwrap();
+            mt.put(format!("key{i}"), format!("value{}", i * 10)).unwrap();
         }
 
         let items: Vec<_> = mt.range(&"key3".to_string(), &"key7".to_string()).map(|(k, v)| {

@@ -21,37 +21,56 @@ impl WalReader {
     
     pub fn next_entry(&mut self) -> Result<Option<WalEntry>> {
         let mut header = [0u8; 8];
-        
+
         match self.reader.read_exact(&mut header) {
             Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                return Ok(None);
+                return Ok(None); // Clean EOF or partial header (torn write)
             }
             Err(e) => return Err(e.into()),
         }
-        
+
         let data_len = u32::from_le_bytes([header[4], header[5], header[6], header[7]]) as usize;
-        
+
+        // Bounds check: reject obviously invalid lengths (e.g. corrupted header)
+        const MAX_ENTRY_SIZE: usize = 128 * 1024 * 1024; // 128 MB
+        if data_len > MAX_ENTRY_SIZE {
+            return Ok(None); // Corrupt length — treat as end of valid WAL
+        }
+
         let mut data = vec![0u8; data_len];
-        self.reader.read_exact(&mut data)?;
-        
+        match self.reader.read_exact(&mut data) {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                return Ok(None); // Partial entry body (torn write) — skip it
+            }
+            Err(e) => return Err(e.into()),
+        }
+
         let mut full_entry = Vec::with_capacity(8 + data_len);
         full_entry.extend_from_slice(&header);
         full_entry.extend_from_slice(&data);
-        
-        let (entry, size) = WalEntry::decode(&full_entry)?;
-        self.offset += size as u64;
-        
-        Ok(Some(entry))
+
+        match WalEntry::decode(&full_entry) {
+            Ok((entry, size)) => {
+                self.offset += size as u64;
+                Ok(Some(entry))
+            }
+            Err(_) => {
+                // CRC mismatch or decode error — this entry is corrupted (torn write).
+                // Stop here; everything before this point was valid.
+                Ok(None)
+            }
+        }
     }
-    
+
     pub fn read_all(&mut self) -> Result<Vec<WalEntry>> {
         let mut entries = Vec::new();
-        
+
         while let Some(entry) = self.next_entry()? {
             entries.push(entry);
         }
-        
+
         Ok(entries)
     }
     

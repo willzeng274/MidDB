@@ -18,13 +18,11 @@ pub fn run_all() {
     disk_bptree_load(5_000);
     large_value_stress(2_000, 16384);
     write_amplification_test(10_000);
-    // Concurrent benchmarks
     concurrent_writes(4, 25_000);
     concurrent_writes(10, 10_000);
     concurrent_writes(16, 10_000);
     concurrent_reads(10, 10_000);
     concurrent_mixed(5, 5, 10_000);
-    // Durability benchmarks (sync_writes=true)
     durable_writes(10_000, 128);
     durable_batch_writes(10_000, 128, 100);
 
@@ -47,7 +45,7 @@ fn make_db() -> (Database, TempDir) {
 
 fn make_db_durable() -> (Database, TempDir) {
     let dir = TempDir::new().unwrap();
-    let config = Config::new(dir.path()); // sync_writes=true by default
+    let config = Config::new(dir.path());
     (Database::open(config).unwrap(), dir)
 }
 
@@ -66,13 +64,13 @@ fn make_db_small_memtable() -> (Database, TempDir) {
 fn sequential_writes(count: u64, value_size: usize) {
     let (db, _dir) = make_db();
     let mut runner = LoadTestRunner::new(
-        &format!("sequential_writes (n={}, val={}B)", count, value_size),
+        &format!("sequential_writes (n={count}, val={value_size}B)"),
     );
     let value = vec![0xABu8; value_size];
 
     runner.start();
     for i in 0..count {
-        let key = format!("key_{:012}", i).into_bytes();
+        let key = format!("key_{i:012}").into_bytes();
         let op_start = Instant::now();
         match db.put(key, value.clone()) {
             Ok(_) => runner.record_op(op_start.elapsed()),
@@ -85,7 +83,7 @@ fn sequential_writes(count: u64, value_size: usize) {
 fn batch_writes(count: u64, value_size: usize, batch_size: usize) {
     let (db, _dir) = make_db();
     let mut runner = LoadTestRunner::new(
-        &format!("batch_writes (n={}, val={}B, batch={})", count, value_size, batch_size),
+        &format!("batch_writes (n={count}, val={value_size}B, batch={batch_size})"),
     );
     let value = vec![0xABu8; value_size];
     let num_batches = count as usize / batch_size;
@@ -95,7 +93,7 @@ fn batch_writes(count: u64, value_size: usize, batch_size: usize) {
         let mut batch = WriteBatch::with_capacity(batch_size);
         for i in 0..batch_size {
             let key_idx = batch_idx * batch_size + i;
-            let key = format!("key_{:012}", key_idx).into_bytes();
+            let key = format!("key_{key_idx:012}").into_bytes();
             batch.put(key, value.clone());
         }
         let op_start = Instant::now();
@@ -120,12 +118,13 @@ fn batch_writes(count: u64, value_size: usize, batch_size: usize) {
 fn random_reads(count: u64) {
     let (db, _dir) = make_db();
     let total_keys = 50_000u64;
+    let value = vec![0u8; 128];
     for i in 0..total_keys {
-        let key = format!("key_{:012}", i).into_bytes();
-        db.put(key, vec![0u8; 128]).unwrap();
+        let key = format!("key_{i:012}").into_bytes();
+        db.put(key, value.clone()).unwrap();
     }
 
-    let mut runner = LoadTestRunner::new(&format!("random_reads (n={}, pool={})", count, total_keys));
+    let mut runner = LoadTestRunner::new(&format!("random_reads (n={count}, pool={total_keys})"));
     let mut rng = 0x12345678u64;
 
     runner.start();
@@ -134,7 +133,11 @@ fn random_reads(count: u64) {
         let key = format!("key_{:012}", rng % total_keys).into_bytes();
         let op_start = Instant::now();
         match db.get(&key) {
-            Ok(_) => runner.record_op(op_start.elapsed()),
+            Ok(Some(v)) => {
+                assert_eq!(v.len(), 128, "value size mismatch");
+                runner.record_op(op_start.elapsed());
+            }
+            Ok(None) => runner.record_error(),
             Err(_) => runner.record_error(),
         }
     }
@@ -145,7 +148,7 @@ fn mixed_readwrite(count: u64, read_ratio: f64) {
     let (db, _dir) = make_db();
     let pre_pop = 20_000u64;
     for i in 0..pre_pop {
-        db.put(format!("key_{:012}", i).into_bytes(), vec![0u8; 128]).unwrap();
+        db.put(format!("key_{i:012}").into_bytes(), vec![0u8; 128]).unwrap();
     }
 
     let label = format!("mixed r/w (n={}, read={:.0}%)", count, read_ratio * 100.0);
@@ -165,7 +168,7 @@ fn mixed_readwrite(count: u64, read_ratio: f64) {
                 Err(_) => runner.record_error(),
             }
         } else {
-            let key = format!("key_{:012}", write_counter).into_bytes();
+            let key = format!("key_{write_counter:012}").into_bytes();
             write_counter += 1;
             match db.put(key, vec![0u8; 128]) {
                 Ok(_) => runner.record_op(op_start.elapsed()),
@@ -179,13 +182,13 @@ fn mixed_readwrite(count: u64, read_ratio: f64) {
 fn scan_performance(pre_pop: u64) {
     let (db, _dir) = make_db();
     for i in 0..pre_pop {
-        db.put(format!("row_{:012}", i).into_bytes(), vec![0u8; 64]).unwrap();
+        db.put(format!("row_{i:012}").into_bytes(), vec![0u8; 64]).unwrap();
     }
 
     let scan_sizes = [100, 1000, 5000];
     for scan_size in scan_sizes {
         let mut runner = LoadTestRunner::new(
-            &format!("scan (pool={}, range={})", pre_pop, scan_size),
+            &format!("scan (pool={pre_pop}, range={scan_size})"),
         );
         let iterations = 50;
 
@@ -203,13 +206,13 @@ fn scan_performance(pre_pop: u64) {
 
 fn transaction_throughput(count: u64) {
     let (db, _dir) = make_db();
-    let mut runner = LoadTestRunner::new(&format!("transactions (n={})", count));
+    let mut runner = LoadTestRunner::new(&format!("transactions (n={count})"));
 
     runner.start();
     for i in 0..count {
         let op_start = Instant::now();
         let txn = db.begin_txn();
-        let key = format!("txn_{:012}", i).into_bytes();
+        let key = format!("txn_{i:012}").into_bytes();
         if db.put_txn(txn, key.clone(), vec![0u8; 64]).is_err() {
             runner.record_error();
             continue;
@@ -227,12 +230,12 @@ fn disk_bptree_load(count: u64) {
     let path = dir.path().join("loadtest.bpt");
     let mut tree = DiskBPTree::create(path.to_str().unwrap()).unwrap();
 
-    let mut runner = LoadTestRunner::new(&format!("disk_bptree insert+lookup (n={})", count));
+    let mut runner = LoadTestRunner::new(&format!("disk_bptree insert+lookup (n={count})"));
 
     runner.start();
     for i in 0..count {
-        let key = format!("bpt_{:012}", i).into_bytes();
-        let val = format!("val_{}", i).into_bytes();
+        let key = format!("bpt_{i:012}").into_bytes();
+        let val = format!("val_{i}").into_bytes();
         let op_start = Instant::now();
         tree.insert(key, val).unwrap();
         runner.record_op(op_start.elapsed());
@@ -260,7 +263,7 @@ fn large_value_stress(count: u64, value_size: usize) {
 
     runner.start();
     for i in 0..count {
-        let key = format!("large_{:012}", i).into_bytes();
+        let key = format!("large_{i:012}").into_bytes();
         let op_start = Instant::now();
         db.put(key, value.clone()).unwrap();
         runner.record_op(op_start.elapsed());
@@ -282,14 +285,14 @@ fn large_value_stress(count: u64, value_size: usize) {
 fn write_amplification_test(count: u64) {
     let (db, _dir) = make_db();
     let mut runner = LoadTestRunner::new(
-        &format!("overwrite_stress (n={}, same keys rewritten 5x)", count),
+        &format!("overwrite_stress (n={count}, same keys rewritten 5x)"),
     );
 
     runner.start();
     for round in 0..5u64 {
         for i in 0..count {
-            let key = format!("ow_{:012}", i).into_bytes();
-            let value = format!("round_{}_{}", round, i).into_bytes();
+            let key = format!("ow_{i:012}").into_bytes();
+            let value = format!("round_{round}_{i}").into_bytes();
             let op_start = Instant::now();
             db.put(key, value).unwrap();
             runner.record_op(op_start.elapsed());
@@ -298,10 +301,10 @@ fn write_amplification_test(count: u64) {
 
     // Verify latest values
     for i in 0..100 {
-        let key = format!("ow_{:012}", i).into_bytes();
+        let key = format!("ow_{i:012}").into_bytes();
         let val = db.get(&key).unwrap().unwrap();
         let val_str = String::from_utf8(val).unwrap();
-        assert!(val_str.starts_with("round_4_"), "Expected round_4, got {}", val_str);
+        assert!(val_str.starts_with("round_4_"), "Expected round_4, got {val_str}");
     }
     runner.finish().print();
 }
@@ -309,35 +312,43 @@ fn write_amplification_test(count: u64) {
 fn concurrent_writes(threads: usize, ops_per_thread: u64) {
     let (db, _dir) = make_db();
     let db = Arc::new(db);
-    let label = format!("concurrent_writes (threads={}, ops/t={})", threads, ops_per_thread);
+    let label = format!("concurrent_writes (threads={threads}, ops/t={ops_per_thread})");
     let mut runner = LoadTestRunner::new(&label);
     let value = vec![0xABu8; 128];
 
     runner.start();
-    let total_start = Instant::now();
 
     let handles: Vec<_> = (0..threads).map(|t| {
         let db = Arc::clone(&db);
         let value = value.clone();
         thread::spawn(move || {
+            let mut latencies = Vec::with_capacity(ops_per_thread as usize);
             for i in 0..ops_per_thread {
-                let key = format!("t{}_{:012}", t, i).into_bytes();
+                let key = format!("t{t}_{i:012}").into_bytes();
+                let op_start = Instant::now();
                 db.put(key, value.clone()).unwrap();
+                latencies.push(op_start.elapsed());
             }
+            latencies
         })
     }).collect();
 
     for h in handles {
-        h.join().unwrap();
-    }
-
-    let total_elapsed = total_start.elapsed();
-    let total_ops = threads as u64 * ops_per_thread;
-    let per_op = total_elapsed / total_ops as u32;
-    for _ in 0..total_ops {
-        runner.record_op(per_op);
+        for lat in h.join().unwrap() {
+            runner.record_op(lat);
+        }
     }
     runner.finish().print();
+
+    // Verify a sample of written data is retrievable
+    let spot_check = 100.min(ops_per_thread);
+    for t in 0..threads {
+        for i in 0..spot_check {
+            let key = format!("t{t}_{i:012}").into_bytes();
+            let val = db.get(&key).expect("read error").expect("missing key after concurrent write");
+            assert_eq!(val.len(), 128, "value corruption in concurrent write");
+        }
+    }
 }
 
 fn concurrent_reads(threads: usize, ops_per_thread: u64) {
@@ -345,37 +356,46 @@ fn concurrent_reads(threads: usize, ops_per_thread: u64) {
     // Pre-populate
     let total_keys = 50_000u64;
     for i in 0..total_keys {
-        db.put(format!("key_{:012}", i).into_bytes(), vec![0u8; 128]).unwrap();
+        db.put(format!("key_{i:012}").into_bytes(), vec![0u8; 128]).unwrap();
     }
 
     let db = Arc::new(db);
-    let label = format!("concurrent_reads (threads={}, ops/t={})", threads, ops_per_thread);
+    let label = format!("concurrent_reads (threads={threads}, ops/t={ops_per_thread})");
     let mut runner = LoadTestRunner::new(&label);
 
     runner.start();
-    let total_start = Instant::now();
 
     let handles: Vec<_> = (0..threads).map(|t| {
         let db = Arc::clone(&db);
         thread::spawn(move || {
+            let mut latencies = Vec::with_capacity(ops_per_thread as usize);
             let mut rng = (t as u64 + 1).wrapping_mul(0x12345678);
             for _ in 0..ops_per_thread {
                 rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
                 let key = format!("key_{:012}", rng % total_keys).into_bytes();
-                let _ = db.get(&key);
+                let op_start = Instant::now();
+                match db.get(&key) {
+                    Ok(Some(v)) => {
+                        let lat = op_start.elapsed();
+                        assert_eq!(v.len(), 128, "value size mismatch in concurrent read");
+                        latencies.push(Ok(lat));
+                    }
+                    _ => {
+                        latencies.push(Err(()));
+                    }
+                }
             }
+            latencies
         })
     }).collect();
 
     for h in handles {
-        h.join().unwrap();
-    }
-
-    let total_elapsed = total_start.elapsed();
-    let total_ops = threads as u64 * ops_per_thread;
-    let per_op = total_elapsed / total_ops as u32;
-    for _ in 0..total_ops {
-        runner.record_op(per_op);
+        for result in h.join().unwrap() {
+            match result {
+                Ok(lat) => runner.record_op(lat),
+                Err(()) => runner.record_error(),
+            }
+        }
     }
     runner.finish().print();
 }
@@ -384,65 +404,90 @@ fn concurrent_mixed(writers: usize, readers: usize, ops_per_thread: u64) {
     let (db, _dir) = make_db();
     // Pre-populate
     for i in 0..20_000u64 {
-        db.put(format!("key_{:012}", i).into_bytes(), vec![0u8; 128]).unwrap();
+        db.put(format!("key_{i:012}").into_bytes(), vec![0u8; 128]).unwrap();
     }
 
     let db = Arc::new(db);
-    let label = format!("concurrent_mixed (w={}, r={}, ops/t={})", writers, readers, ops_per_thread);
+    let label = format!("concurrent_mixed (w={writers}, r={readers}, ops/t={ops_per_thread})");
     let mut runner = LoadTestRunner::new(&label);
 
     runner.start();
-    let total_start = Instant::now();
 
     let mut handles = Vec::new();
 
-    // Writer threads
+    // Writer threads — record real per-op latency
     for t in 0..writers {
         let db = Arc::clone(&db);
         handles.push(thread::spawn(move || {
+            let mut latencies = Vec::with_capacity(ops_per_thread as usize);
             for i in 0..ops_per_thread {
-                let key = format!("w{}_{:012}", t, i).into_bytes();
+                let key = format!("w{t}_{i:012}").into_bytes();
+                let op_start = Instant::now();
                 db.put(key, vec![0u8; 128]).unwrap();
+                latencies.push(Ok(op_start.elapsed()));
             }
+            latencies
         }));
     }
 
-    // Reader threads
+    // Reader threads — verify values exist and record real latency
     for t in 0..readers {
         let db = Arc::clone(&db);
         handles.push(thread::spawn(move || {
+            let mut latencies = Vec::with_capacity(ops_per_thread as usize);
             let mut rng = (t as u64 + 100).wrapping_mul(0xDEADBEEF);
             for _ in 0..ops_per_thread {
                 rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
                 let key = format!("key_{:012}", rng % 20_000).into_bytes();
-                let _ = db.get(&key);
+                let op_start = Instant::now();
+                match db.get(&key) {
+                    Ok(Some(v)) => {
+                        let lat = op_start.elapsed();
+                        assert_eq!(v.len(), 128, "value corruption in concurrent mixed read");
+                        latencies.push(Ok(lat));
+                    }
+                    Ok(None) => {
+                        // Key might not exist yet if readers race ahead of pre-populate
+                        latencies.push(Ok(op_start.elapsed()));
+                    }
+                    Err(_) => latencies.push(Err(())),
+                }
             }
+            latencies
         }));
     }
 
     for h in handles {
-        h.join().unwrap();
-    }
-
-    let total_elapsed = total_start.elapsed();
-    let total_ops = (writers + readers) as u64 * ops_per_thread;
-    let per_op = total_elapsed / total_ops as u32;
-    for _ in 0..total_ops {
-        runner.record_op(per_op);
+        for result in h.join().unwrap() {
+            match result {
+                Ok(lat) => runner.record_op(lat),
+                Err(()) => runner.record_error(),
+            }
+        }
     }
     runner.finish().print();
+
+    // Verify writer data is retrievable
+    let spot_check = 100.min(ops_per_thread);
+    for t in 0..writers {
+        for i in 0..spot_check {
+            let key = format!("w{t}_{i:012}").into_bytes();
+            let val = db.get(&key).expect("read error").expect("missing key after concurrent mixed write");
+            assert_eq!(val.len(), 128, "value corruption in concurrent mixed write");
+        }
+    }
 }
 
 fn durable_writes(count: u64, value_size: usize) {
     let (db, _dir) = make_db_durable();
     let mut runner = LoadTestRunner::new(
-        &format!("durable_writes [sync] (n={}, val={}B)", count, value_size),
+        &format!("durable_writes [sync] (n={count}, val={value_size}B)"),
     );
     let value = vec![0xABu8; value_size];
 
     runner.start();
     for i in 0..count {
-        let key = format!("key_{:012}", i).into_bytes();
+        let key = format!("key_{i:012}").into_bytes();
         let op_start = Instant::now();
         match db.put(key, value.clone()) {
             Ok(_) => runner.record_op(op_start.elapsed()),
@@ -455,7 +500,7 @@ fn durable_writes(count: u64, value_size: usize) {
 fn durable_batch_writes(count: u64, value_size: usize, batch_size: usize) {
     let (db, _dir) = make_db_durable();
     let mut runner = LoadTestRunner::new(
-        &format!("durable_batch [sync] (n={}, val={}B, batch={})", count, value_size, batch_size),
+        &format!("durable_batch [sync] (n={count}, val={value_size}B, batch={batch_size})"),
     );
     let value = vec![0xABu8; value_size];
     let num_batches = count as usize / batch_size;
@@ -465,7 +510,7 @@ fn durable_batch_writes(count: u64, value_size: usize, batch_size: usize) {
         let mut batch = WriteBatch::with_capacity(batch_size);
         for i in 0..batch_size {
             let key_idx = batch_idx * batch_size + i;
-            let key = format!("key_{:012}", key_idx).into_bytes();
+            let key = format!("key_{key_idx:012}").into_bytes();
             batch.put(key, value.clone());
         }
         let op_start = Instant::now();
@@ -494,13 +539,13 @@ fn durable_batch_writes(count: u64, value_size: usize, batch_size: usize) {
 fn disk_bound_writes(count: u64, value_size: usize) {
     let (db, _dir) = make_db_small_memtable();
     let mut runner = LoadTestRunner::new(
-        &format!("DISK: writes through flush (n={}, val={}B, 1MB memtable)", count, value_size),
+        &format!("DISK: writes through flush (n={count}, val={value_size}B, 1MB memtable)"),
     );
     let value = vec![0xABu8; value_size];
 
     runner.start();
     for i in 0..count {
-        let key = format!("key_{:012}", i).into_bytes();
+        let key = format!("key_{i:012}").into_bytes();
         let op_start = Instant::now();
         match db.put(key, value.clone()) {
             Ok(_) => runner.record_op(op_start.elapsed()),
@@ -524,7 +569,7 @@ fn disk_bound_reads_after_flush(num_keys: u64, value_size: usize) {
 
     // Write all keys — this will trigger many flushes
     for i in 0..num_keys {
-        let key = format!("key_{:012}", i).into_bytes();
+        let key = format!("key_{i:012}").into_bytes();
         db.put(key, value.clone()).unwrap();
     }
 
@@ -568,13 +613,13 @@ fn disk_bound_reads_after_flush(num_keys: u64, value_size: usize) {
 fn sustained_write_under_compaction(count: u64, value_size: usize) {
     let (db, _dir) = make_db_small_memtable();
     let mut runner = LoadTestRunner::new(
-        &format!("DISK: sustained writes + compaction (n={}, val={}B)", count, value_size),
+        &format!("DISK: sustained writes + compaction (n={count}, val={value_size}B)"),
     );
     let value = vec![0xABu8; value_size];
 
     runner.start();
     for i in 0..count {
-        let key = format!("key_{:012}", i).into_bytes();
+        let key = format!("key_{i:012}").into_bytes();
         let op_start = Instant::now();
         match db.put(key, value.clone()) {
             Ok(_) => runner.record_op(op_start.elapsed()),
@@ -599,7 +644,7 @@ fn mixed_rw_after_flush(num_prepop: u64, ops: u64, value_size: usize) {
 
     // Pre-populate — forces flushes
     for i in 0..num_prepop {
-        let key = format!("key_{:012}", i).into_bytes();
+        let key = format!("key_{i:012}").into_bytes();
         db.put(key, value.clone()).unwrap();
     }
 
@@ -627,7 +672,7 @@ fn mixed_rw_after_flush(num_prepop: u64, ops: u64, value_size: usize) {
             }
         } else {
             // Write new key
-            let key = format!("key_{:012}", write_counter).into_bytes();
+            let key = format!("key_{write_counter:012}").into_bytes();
             write_counter += 1;
             match db.put(key, value.clone()) {
                 Ok(_) => runner.record_op(op_start.elapsed()),

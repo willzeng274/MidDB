@@ -6,6 +6,12 @@ pub struct Block {
     restarts: Vec<u32>,
 }
 
+impl Default for Block {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Block {
     pub fn new() -> Self {
         Block {
@@ -25,12 +31,10 @@ impl Block {
     pub fn encode(&self) -> Vec<u8> {
         let mut encoded = self.data.clone();
         
-        // Append restart points
         for &restart in &self.restarts {
             encoded.extend_from_slice(&restart.to_le_bytes());
         }
         
-        // Append number of restart points
         encoded.extend_from_slice(&(self.restarts.len() as u32).to_le_bytes());
         
         encoded
@@ -41,7 +45,6 @@ impl Block {
             return Err(Error::Corruption("Block too short".to_string()));
         }
         
-        // Read number of restart points from the end
         let num_restarts_offset = data.len() - 4;
         let num_restarts = u32::from_le_bytes([
             data[num_restarts_offset],
@@ -59,7 +62,6 @@ impl Block {
             return Err(Error::Corruption("Invalid restart points".to_string()));
         }
         
-        // Read restart points
         let mut restarts = Vec::with_capacity(num_restarts);
         for i in 0..num_restarts {
             let offset = restarts_offset + i * 4;
@@ -113,7 +115,6 @@ impl BlockBuilder {
         if self.counter < self.restart_interval {
             shared = common_prefix_len(&self.last_key, key);
         } else {
-            // This is a restart point
             self.block.restarts.push(self.block.data.len() as u32);
             self.counter = 0;
         }
@@ -180,8 +181,26 @@ impl BlockIterator {
     }
     
     pub fn seek(&mut self, target: &[u8]) {
-        self.seek_to_restart_point(0);
-        
+        if target.is_empty() || self.restarts.is_empty() {
+            self.seek_to_restart_point(0);
+        } else {
+            // Binary search on restart points to find the last restart whose
+            // key is <= target, then linear scan from there.
+            let mut lo = 0;
+            let mut hi = self.restarts.len() - 1;
+
+            while lo < hi {
+                let mid = lo + (hi - lo + 1) / 2;
+                let key = self.decode_key_at_restart(mid);
+                if key.as_slice() <= target {
+                    lo = mid;
+                } else {
+                    hi = mid - 1;
+                }
+            }
+            self.seek_to_restart_point(lo);
+        }
+
         while let Some((key, value)) = self.parse_next_entry() {
             if key.as_slice() >= target {
                 self.key = key;
@@ -191,9 +210,54 @@ impl BlockIterator {
             self.key = key;
             self.value = value;
         }
-        
+
         self.key.clear();
         self.value.clear();
+    }
+
+    /// Decode the full key at the given restart point (restart keys have shared=0).
+    /// Returns empty vec on malformed data rather than panicking.
+    fn decode_key_at_restart(&self, index: usize) -> Vec<u8> {
+        if index >= self.restarts.len() {
+            return Vec::new();
+        }
+        let mut pos = self.restarts[index] as usize;
+        if pos >= self.data.len() {
+            return Vec::new();
+        }
+
+        // Decode shared prefix length (must be 0 at restart points)
+        let (shared, bytes) = Self::decode_varint_at(&self.data, pos);
+        pos += bytes;
+        if shared != 0 {
+            return Vec::new(); // malformed restart point
+        }
+        // Decode non-shared length
+        let (non_shared, bytes) = Self::decode_varint_at(&self.data, pos);
+        pos += bytes;
+        // Skip value length
+        let (_, bytes) = Self::decode_varint_at(&self.data, pos);
+        pos += bytes;
+
+        if pos + non_shared > self.data.len() {
+            return Vec::new(); // truncated block
+        }
+        self.data[pos..pos + non_shared].to_vec()
+    }
+
+    fn decode_varint_at(data: &[u8], mut pos: usize) -> (usize, usize) {
+        let start = pos;
+        let mut result = 0u64;
+        let mut shift = 0;
+        loop {
+            if pos >= data.len() { return (0, pos - start); }
+            let byte = data[pos];
+            pos += 1;
+            result |= ((byte & 0x7f) as u64) << shift;
+            if byte < 128 { return (result as usize, pos - start); }
+            shift += 7;
+            if shift >= 64 { return (0, pos - start); }
+        }
     }
     
     pub fn key(&self) -> &[u8] {
@@ -325,8 +389,8 @@ mod tests {
         let mut builder = BlockBuilder::new(16);
         
         for i in 0..10 {
-            let key = format!("key{:03}", i);
-            let value = format!("value{}", i);
+            let key = format!("key{i:03}");
+            let value = format!("value{i}");
             builder.add(key.as_bytes(), value.as_bytes());
         }
         

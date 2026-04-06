@@ -16,6 +16,7 @@ pub mod compression;
 
 pub mod cache;
 pub mod catalog;
+pub mod manifest;
 pub mod transaction;
 pub mod db;
 pub use error::{Error, Result};

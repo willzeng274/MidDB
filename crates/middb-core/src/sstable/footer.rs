@@ -91,8 +91,7 @@ impl Footer {
         let magic = u64::from_le_bytes(bytes[40..48].try_into().unwrap());
         if magic != SSTABLE_MAGIC {
             return Err(Error::Corruption(format!(
-                "Invalid SSTable magic number: expected {:#x}, got {:#x}",
-                SSTABLE_MAGIC, magic
+                "Invalid SSTable magic number: expected {SSTABLE_MAGIC:#x}, got {magic:#x}"
             )));
         }
 
@@ -102,8 +101,7 @@ impl Footer {
         let version = u32::from_le_bytes(bytes[32..36].try_into().unwrap());
         if version != FOOTER_VERSION {
             return Err(Error::Corruption(format!(
-                "Unsupported SSTable version: {}",
-                version
+                "Unsupported SSTable version: {version}"
             )));
         }
 

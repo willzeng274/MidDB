@@ -1,7 +1,7 @@
 use super::entry::WalEntry;
 use crate::Result;
 use std::fs::{File, OpenOptions};
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Seek, Write};
 use std::path::{Path, PathBuf};
 
 pub struct WalWriter {
@@ -58,6 +58,20 @@ impl WalWriter {
     
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Truncate the WAL to zero length, reusing the same file descriptor.
+    /// This avoids the race where creating a new file at the same path
+    /// leaves the old fd (held by the WAL writer thread) writing to an
+    /// unlinked inode.
+    pub fn truncate(&mut self) -> Result<()> {
+        self.file.flush()?;
+        self.file.get_mut().sync_all()?;
+        let file = self.file.get_mut();
+        file.set_len(0)?;
+        file.seek(std::io::SeekFrom::Start(0))?;
+        self.bytes_written = 0;
+        Ok(())
     }
 }
 

@@ -20,7 +20,7 @@ impl MemStorage {
         self.pages
             .get(&page_id)
             .cloned()
-            .ok_or_else(|| crate::Error::InvalidArgument(format!("Page {} not found", page_id)))
+            .ok_or_else(|| crate::Error::InvalidArgument(format!("Page {page_id} not found")))
     }
     
     pub fn write_page(&mut self, page_id: PageId, page: &Page) -> Result<()> {

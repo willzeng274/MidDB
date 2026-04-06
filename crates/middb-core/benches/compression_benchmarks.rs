@@ -23,7 +23,7 @@ fn bench_compress(c: &mut Criterion) {
     let data = generate_data(64 * 1024, 0.7); // 64KB, 70% compressible
 
     for ct in [CompressionType::Lz4, CompressionType::Snappy] {
-        let name = format!("{:?}", ct);
+        let name = format!("{ct:?}");
         group.throughput(Throughput::Bytes(data.len() as u64));
         group.bench_with_input(BenchmarkId::new("64KB", &name), &ct, |b, ct| {
             b.iter(|| compress(&data, *ct));
@@ -37,7 +37,7 @@ fn bench_decompress(c: &mut Criterion) {
     let data = generate_data(64 * 1024, 0.7);
 
     for ct in [CompressionType::Lz4, CompressionType::Snappy] {
-        let name = format!("{:?}", ct);
+        let name = format!("{ct:?}");
         let compressed = compress(&data, ct);
         group.throughput(Throughput::Bytes(data.len() as u64));
         group.bench_with_input(BenchmarkId::new("64KB", &name), &compressed, |b, compressed| {
@@ -54,7 +54,7 @@ fn bench_compression_ratio(c: &mut Criterion) {
     for (label, compressibility) in [("high", 0.9), ("medium", 0.5), ("low", 0.1)] {
         let data = generate_data(256 * 1024, compressibility);
         for ct in [CompressionType::Lz4, CompressionType::Snappy] {
-            let name = format!("{:?}_{}", ct, label);
+            let name = format!("{ct:?}_{label}");
             group.bench_with_input(BenchmarkId::new("256KB", &name), &(&data, ct), |b, (data, ct)| {
                 b.iter(|| {
                     let compressed = compress(data, *ct);
@@ -71,7 +71,7 @@ fn bench_end_to_end(c: &mut Criterion) {
     let data = generate_data(64 * 1024, 0.7);
 
     for ct in [CompressionType::None, CompressionType::Lz4, CompressionType::Snappy] {
-        let name = format!("{:?}", ct);
+        let name = format!("{ct:?}");
         group.throughput(Throughput::Bytes(data.len() as u64));
         group.bench_with_input(BenchmarkId::new("64KB", &name), &ct, |b, ct| {
             b.iter(|| {

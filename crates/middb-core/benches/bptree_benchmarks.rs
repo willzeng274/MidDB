@@ -12,8 +12,8 @@ fn bench_bptree_insert(c: &mut Criterion) {
             b.iter(|| {
                 let mut tree = TestTree::new();
                 for i in 0..count {
-                    let key = format!("key_{:08}", i).into_bytes();
-                    tree.insert(key, format!("val_{}", i).into_bytes());
+                    let key = format!("key_{i:08}").into_bytes();
+                    tree.insert(key, format!("val_{i}").into_bytes());
                 }
             });
         });
@@ -27,8 +27,8 @@ fn bench_bptree_lookup(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("memory", count), &count, |b, &count| {
             let mut tree = TestTree::new();
             for i in 0..count {
-                let key = format!("key_{:08}", i).into_bytes();
-                tree.insert(key, format!("val_{}", i).into_bytes());
+                let key = format!("key_{i:08}").into_bytes();
+                tree.insert(key, format!("val_{i}").into_bytes());
             }
             let mut idx = 0u64;
             b.iter(|| {
@@ -47,8 +47,8 @@ fn bench_bptree_range(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("memory", count), &count, |b, &count| {
             let mut tree = TestTree::new();
             for i in 0..count {
-                let key = format!("key_{:08}", i).into_bytes();
-                tree.insert(key, format!("val_{}", i).into_bytes());
+                let key = format!("key_{i:08}").into_bytes();
+                tree.insert(key, format!("val_{i}").into_bytes());
             }
             let start = b"key_00000100".to_vec();
             let end = b"key_00000200".to_vec();
@@ -70,8 +70,8 @@ fn bench_disk_bptree_insert(c: &mut Criterion) {
                 let path = dir.path().join("bench.bpt");
                 let mut tree = DiskBPTree::create(path.to_str().unwrap()).unwrap();
                 for i in 0..count {
-                    let key = format!("key_{:08}", i).into_bytes();
-                    tree.insert(key, format!("val_{}", i).into_bytes()).unwrap();
+                    let key = format!("key_{i:08}").into_bytes();
+                    tree.insert(key, format!("val_{i}").into_bytes()).unwrap();
                 }
                 tree.flush().unwrap();
             });
@@ -88,8 +88,8 @@ fn bench_disk_bptree_lookup(c: &mut Criterion) {
             let path = dir.path().join("bench.bpt");
             let mut tree = DiskBPTree::create(path.to_str().unwrap()).unwrap();
             for i in 0..count {
-                let key = format!("key_{:08}", i).into_bytes();
-                tree.insert(key, format!("val_{}", i).into_bytes()).unwrap();
+                let key = format!("key_{i:08}").into_bytes();
+                tree.insert(key, format!("val_{i}").into_bytes()).unwrap();
             }
             tree.flush().unwrap();
 

@@ -86,7 +86,7 @@ impl Coordinator {
         let mut results = Vec::with_capacity(handles.len());
         for handle in handles {
             let result = handle.await
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))??;
+                .map_err(io::Error::other)??;
             results.push(result);
         }
         Ok(results)

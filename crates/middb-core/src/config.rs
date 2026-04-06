@@ -2,16 +2,13 @@ use crate::compression::CompressionType;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum CompactionStyle {
+    #[default]
     Leveled,
     Universal,
 }
 
-impl Default for CompactionStyle {
-    fn default() -> Self {
-        CompactionStyle::Leveled
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -39,15 +36,15 @@ impl Default for Config {
             data_dir: PathBuf::from("./data"),
             max_open_files: 1000,
             compaction_style: CompactionStyle::Leveled,
-            bloom_bits_per_key: 10,
-            block_size: 64 * 1024,
-            use_compression: false,
-            compression_type: CompressionType::None,
+            bloom_bits_per_key: 15,
+            block_size: 4 * 1024,
+            use_compression: true,
+            compression_type: CompressionType::Lz4,
             level0_file_num_compaction_trigger: 4,
             max_bytes_for_level_base: 10 * 1024 * 1024,
             max_bytes_for_level_multiplier: 10,
             sync_writes: true,
-            block_cache_size: 64 * 1024 * 1024,
+            block_cache_size: 256 * 1024 * 1024,
         }
     }
 }
@@ -69,8 +66,8 @@ impl Config {
             return Err("memtable_size must be at least 1 MB".to_string());
         }
         
-        if self.block_size < 4096 {
-            return Err("block_size must be at least 4 KB".to_string());
+        if self.block_size < 1024 {
+            return Err("block_size must be at least 1 KB".to_string());
         }
         
         if self.bloom_bits_per_key == 0 {
@@ -112,7 +109,7 @@ mod tests {
     #[test]
     fn test_invalid_block_size() {
         let mut config = Config::default();
-        config.block_size = 1024; // Too small
+        config.block_size = 512; // Too small
         assert!(config.validate().is_err());
     }
 }

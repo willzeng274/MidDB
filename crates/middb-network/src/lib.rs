@@ -4,6 +4,6 @@ pub mod client;
 pub mod pool;
 
 pub use protocol::{Frame, FramePayload, Request, Response};
-pub use server::Server;
+pub use server::{Server, RequestHandler, LocalHandler};
 pub use client::{Client, QueryResult};
 pub use pool::ConnectionPool;

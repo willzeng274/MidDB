@@ -22,7 +22,7 @@ impl ConnectionPool {
 
     pub async fn get(&self) -> io::Result<PooledConnection<'_>> {
         let permit = self.semaphore.clone().acquire_owned().await
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "Pool closed"))?;
+            .map_err(|_| io::Error::other("Pool closed"))?;
 
         let client = {
             let mut conns = self.connections.lock().await;

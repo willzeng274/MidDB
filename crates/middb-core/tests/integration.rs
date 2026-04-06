@@ -51,14 +51,14 @@ fn test_database_multiple_keys() {
     let db = Database::open(config).unwrap();
     
     for i in 0..100 {
-        let key = format!("key{:03}", i);
-        let value = format!("value{}", i);
+        let key = format!("key{i:03}");
+        let value = format!("value{i}");
         db.put(key.into_bytes(), value.into_bytes()).unwrap();
     }
     
     for i in 0..100 {
-        let key = format!("key{:03}", i);
-        let expected_value = format!("value{}", i);
+        let key = format!("key{i:03}");
+        let expected_value = format!("value{i}");
         let actual_value = db.get(&key.into_bytes()).unwrap();
         assert_eq!(actual_value, Some(expected_value.into_bytes()));
     }
@@ -78,8 +78,8 @@ fn test_sstable_write_and_read() {
         let mut writer = SSTableWriter::create(path, 4096).unwrap();
         
         for i in 0..10 {
-            let key = format!("key{}", i);
-            let value = format!("value{}", i);
+            let key = format!("key{i}");
+            let value = format!("value{i}");
             writer.add(key.as_bytes(), value.as_bytes()).unwrap();
         }
         
@@ -90,8 +90,8 @@ fn test_sstable_write_and_read() {
     let reader = SSTableReader::open(path).unwrap();
     
     for i in 0..10 {
-        let key = format!("key{}", i);
-        let expected_value = format!("value{}", i);
+        let key = format!("key{i}");
+        let expected_value = format!("value{i}");
         let actual_value = reader.get(key.as_bytes()).unwrap();
         assert_eq!(actual_value, Some(expected_value.into_bytes()));
     }
@@ -131,18 +131,18 @@ fn test_bloom_filter_integration() {
     let mut filter = BloomFilter::new(100, 10);
     
     for i in 0..100 {
-        let key = format!("key{}", i);
+        let key = format!("key{i}");
         filter.insert(key.as_bytes());
     }
     
     for i in 0..100 {
-        let key = format!("key{}", i);
+        let key = format!("key{i}");
         assert!(filter.may_contain(key.as_bytes()));
     }
     
     let mut false_positives = 0;
     for i in 100..200 {
-        let key = format!("key{}", i);
+        let key = format!("key{i}");
         if filter.may_contain(key.as_bytes()) {
             false_positives += 1;
         }

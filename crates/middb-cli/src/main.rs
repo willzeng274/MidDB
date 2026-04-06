@@ -1,11 +1,13 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use middb_cluster::{ClusterConfig, ClusterNode};
 use middb_core::{Config, Database};
 use middb_network::{Client, Server};
 use middb_query::{BinaryOperator, Executor, Expr, Planner, Row, Table, Value};
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 #[derive(Parser)]
 #[command(name = "middb")]
@@ -39,6 +41,34 @@ enum Commands {
         #[arg(short, long, default_value = "./data")]
         data_dir: PathBuf,
     },
+
+    Cluster {
+        #[arg(short, long, default_value = "./data")]
+        data_dir: PathBuf,
+
+        #[arg(short, long, default_value = "127.0.0.1:7878")]
+        bind: String,
+
+        /// Bootstrap a new cluster (first node)
+        #[arg(long)]
+        bootstrap: bool,
+
+        /// Join an existing cluster by connecting to this seed node
+        #[arg(long)]
+        join: Option<String>,
+
+        /// Replication factor (default 3)
+        #[arg(long, default_value = "3")]
+        replication_factor: usize,
+
+        /// Write quorum (default 2)
+        #[arg(long, default_value = "2")]
+        write_quorum: usize,
+
+        /// Read quorum (default 1 for low latency)
+        #[arg(long, default_value = "1")]
+        read_quorum: usize,
+    },
 }
 
 #[tokio::main]
@@ -58,19 +88,22 @@ async fn main() -> Result<()> {
         Commands::Query { data_dir } => {
             run_query(data_dir)
         }
+        Commands::Cluster { data_dir, bind, bootstrap, join, replication_factor, write_quorum, read_quorum } => {
+            run_cluster(data_dir, bind, bootstrap, join, replication_factor, write_quorum, read_quorum).await
+        }
     }
 }
 
 async fn run_server(data_dir: PathBuf, bind: String) -> Result<()> {
     println!("Starting MidDB server");
-    println!("Data directory: {:?}", data_dir);
-    println!("Binding to: {}", bind);
+    println!("Data directory: {data_dir:?}");
+    println!("Binding to: {bind}");
     
     let config = Config::new(data_dir);
     let db = Database::open(config).context("Failed to open database")?;
     
     let server = Server::new(db, bind.clone());
-    println!("Server listening on {}", bind);
+    println!("Server listening on {bind}");
     
     server.run().await.context("Server error")?;
     
@@ -78,7 +111,7 @@ async fn run_server(data_dir: PathBuf, bind: String) -> Result<()> {
 }
 
 async fn run_client(server: &str) -> Result<()> {
-    println!("Connecting to {}", server);
+    println!("Connecting to {server}");
     
     let mut client = Client::connect(server)
         .await
@@ -111,7 +144,7 @@ async fn run_client(server: &str) -> Result<()> {
                 }
                 
                 if let Err(e) = handle_client_command(&mut client, line).await {
-                    eprintln!("Error: {}", e);
+                    eprintln!("Error: {e}");
                 }
             }
             Err(ReadlineError::Interrupted) => {
@@ -122,7 +155,7 @@ async fn run_client(server: &str) -> Result<()> {
                 break;
             }
             Err(err) => {
-                eprintln!("Error: {}", err);
+                eprintln!("Error: {err}");
                 break;
             }
         }
@@ -192,7 +225,7 @@ async fn handle_client_command(client: &mut Client, line: &str) -> Result<()> {
 }
 
 fn run_local(data_dir: PathBuf) -> Result<()> {
-    println!("Opening local database at {:?}", data_dir);
+    println!("Opening local database at {data_dir:?}");
     
     let config = Config::new(data_dir);
     let db = Database::open(config).context("Failed to open database")?;
@@ -223,7 +256,7 @@ fn run_local(data_dir: PathBuf) -> Result<()> {
                 }
                 
                 if let Err(e) = handle_local_command(&db, line) {
-                    eprintln!("Error: {}", e);
+                    eprintln!("Error: {e}");
                 }
             }
             Err(ReadlineError::Interrupted) => {
@@ -234,7 +267,7 @@ fn run_local(data_dir: PathBuf) -> Result<()> {
                 break;
             }
             Err(err) => {
-                eprintln!("Error: {}", err);
+                eprintln!("Error: {err}");
                 break;
             }
         }
@@ -361,7 +394,7 @@ fn run_query(_data_dir: PathBuf) -> Result<()> {
                 }
                 
                 if let Err(e) = handle_query_command(&executor, &planner, line) {
-                    eprintln!("Error: {}", e);
+                    eprintln!("Error: {e}");
                 }
             }
             Err(ReadlineError::Interrupted) => {
@@ -372,7 +405,7 @@ fn run_query(_data_dir: PathBuf) -> Result<()> {
                 break;
             }
             Err(err) => {
-                eprintln!("Error: {}", err);
+                eprintln!("Error: {err}");
                 break;
             }
         }
@@ -402,10 +435,10 @@ fn handle_query_command(executor: &Executor, planner: &Planner, line: &str) -> R
                 Ok(rows) => {
                     println!("{} rows", rows.len());
                     for row in rows {
-                        println!("{:?}", row);
+                        println!("{row:?}");
                     }
                 }
-                Err(e) => anyhow::bail!("Query error: {}", e),
+                Err(e) => anyhow::bail!("Query error: {e}"),
             }
         }
         
@@ -413,12 +446,12 @@ fn handle_query_command(executor: &Executor, planner: &Planner, line: &str) -> R
             if parts.len() < 5 {
                 anyhow::bail!("Usage: filter <table> <column> <op> <value>");
             }
-            
+
             let table = parts[1];
             let column = parts[2];
             let op_str = parts[3];
             let value_str = parts[4];
-            
+
             let op = match op_str {
                 "=" | "==" => BinaryOperator::Eq,
                 "!=" => BinaryOperator::Ne,
@@ -426,39 +459,89 @@ fn handle_query_command(executor: &Executor, planner: &Planner, line: &str) -> R
                 "<=" => BinaryOperator::Le,
                 ">" => BinaryOperator::Gt,
                 ">=" => BinaryOperator::Ge,
-                _ => anyhow::bail!("Unknown operator: {}", op_str),
+                _ => anyhow::bail!("Unknown operator: {op_str}"),
             };
-            
+
             let value = if let Ok(i) = value_str.parse::<i64>() {
                 Value::Int(i)
             } else {
                 Value::String(value_str.to_string())
             };
-            
+
             let filter = Expr::BinaryOp {
                 op,
                 left: Box::new(Expr::Column(column.to_string())),
                 right: Box::new(Expr::Literal(value)),
             };
-            
+
             let logical = planner.plan(table.to_string(), Some(filter));
             let physical = planner.to_physical(logical);
-            
+
             match executor.execute(physical) {
                 Ok(rows) => {
                     println!("{} rows", rows.len());
                     for row in rows {
-                        println!("{:?}", row);
+                        println!("{row:?}");
                     }
                 }
-                Err(e) => anyhow::bail!("Query error: {}", e),
+                Err(e) => anyhow::bail!("Query error: {e}"),
             }
         }
-        
+
         _ => {
             anyhow::bail!("Unknown command: {}", parts[0]);
         }
     }
-    
+
+    Ok(())
+}
+
+async fn run_cluster(
+    data_dir: PathBuf,
+    bind: String,
+    bootstrap: bool,
+    join: Option<String>,
+    replication_factor: usize,
+    write_quorum: usize,
+    read_quorum: usize,
+) -> Result<()> {
+    if !bootstrap && join.is_none() {
+        anyhow::bail!("Must specify either --bootstrap or --join <seed_addr>");
+    }
+
+    println!("Starting MidDB cluster node");
+    println!("Data directory: {data_dir:?}");
+    println!("Binding to: {bind}");
+    println!("Replication: RF={replication_factor}, W={write_quorum}, R={read_quorum}");
+
+    let mut config = Config::new(&data_dir);
+    config.sync_writes = false;
+    let db = Database::open(config).context("Failed to open database")?;
+
+    let cluster_config = ClusterConfig {
+        replication_factor,
+        write_quorum,
+        read_quorum,
+        ..ClusterConfig::default()
+    };
+
+    let node = ClusterNode::new(db, bind.clone(), cluster_config);
+
+    if bootstrap {
+        node.bootstrap().await;
+        println!("Bootstrapped new cluster");
+    } else if let Some(seed) = join {
+        node.join(&seed).await.context("Failed to join cluster")?;
+        println!("Joined cluster via {seed}");
+    }
+
+    // Start heartbeat loop
+    let _heartbeat = node.start_heartbeat();
+
+    // Start server with cluster handler
+    let server = Server::with_handler(node as Arc<dyn middb_network::RequestHandler>, bind.clone());
+    println!("Cluster node listening on {bind}");
+
+    server.run().await.context("Server error")?;
     Ok(())
 }

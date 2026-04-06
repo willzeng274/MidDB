@@ -4,7 +4,8 @@ use tempfile::TempDir;
 
 fn make_db() -> (Database, TempDir) {
     let dir = TempDir::new().unwrap();
-    let config = Config::new(dir.path());
+    let mut config = Config::new(dir.path());
+    config.sync_writes = false;
     let db = Database::open(config).unwrap();
     (db, dir)
 }
@@ -18,7 +19,7 @@ fn bench_put(c: &mut Criterion) {
             let value = vec![0xABu8; size];
             let mut i = 0u64;
             b.iter(|| {
-                let key = format!("key_{:012}", i).into_bytes();
+                let key = format!("key_{i:012}").into_bytes();
                 db.put(key, value.clone()).unwrap();
                 i += 1;
             });
@@ -33,7 +34,7 @@ fn bench_get(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::from_parameter(count), &count, |b, &count| {
             let (db, _dir) = make_db();
             for i in 0..count {
-                let key = format!("key_{:012}", i).into_bytes();
+                let key = format!("key_{i:012}").into_bytes();
                 db.put(key, vec![0u8; 128]).unwrap();
             }
             let mut i = 0u64;
@@ -53,7 +54,7 @@ fn bench_delete(c: &mut Criterion) {
         let (db, _dir) = make_db();
         let mut i = 0u64;
         b.iter(|| {
-            let key = format!("key_{:012}", i).into_bytes();
+            let key = format!("key_{i:012}").into_bytes();
             db.put(key.clone(), vec![0u8; 64]).unwrap();
             db.delete(key).unwrap();
             i += 1;
@@ -68,7 +69,7 @@ fn bench_scan(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::from_parameter(count), &count, |b, &count| {
             let (db, _dir) = make_db();
             for i in 0..count {
-                let key = format!("key_{:012}", i).into_bytes();
+                let key = format!("key_{i:012}").into_bytes();
                 db.put(key, vec![0u8; 64]).unwrap();
             }
             let start = b"key_000000000000".to_vec();

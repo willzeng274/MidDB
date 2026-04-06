@@ -210,7 +210,7 @@ impl Executor {
             return self.scan_from_database(db, table_name, filter);
         }
 
-        Err(format!("Table not found: {}", table_name))
+        Err(format!("Table not found: {table_name}"))
     }
 
     fn scan_from_database(
@@ -223,11 +223,11 @@ impl Executor {
         let catalog = catalog.read();
         let schema = catalog
             .get_table(table_name)
-            .ok_or_else(|| format!("Table not found: {}", table_name))?
+            .ok_or_else(|| format!("Table not found: {table_name}"))?
             .clone();
         drop(catalog);
 
-        let prefix = format!("{}/", table_name);
+        let prefix = format!("{table_name}/");
         let prefix_bytes = prefix.as_bytes().to_vec();
         let end_prefix = {
             let mut end = prefix_bytes.clone();
@@ -284,13 +284,13 @@ impl Executor {
 
         let mut result_rows = Vec::new();
 
-        for (_, group_rows) in &groups {
+        for group_rows in groups.values() {
             let mut columns = Vec::new();
 
             for (i, expr) in group_by.iter().enumerate() {
                 let col_name = match expr {
                     Expr::Column(name) => name.clone(),
-                    _ => format!("group_{}", i),
+                    _ => format!("group_{i}"),
                 };
                 let val = if let Some(first_row) = group_rows.first() {
                     self.eval_expr(expr, first_row).unwrap_or(Value::Null)
@@ -439,7 +439,7 @@ impl Executor {
         let schema = {
             let cat = catalog.read();
             cat.get_table(table_name)
-                .ok_or_else(|| format!("Table not found: {}", table_name))?
+                .ok_or_else(|| format!("Table not found: {table_name}"))?
                 .clone()
         };
 
@@ -472,7 +472,7 @@ impl Executor {
             let encoded = encode_row(&col_names, &row_values);
 
             db.put(key.into_bytes(), encoded)
-                .map_err(|e| format!("Insert failed: {}", e))?;
+                .map_err(|e| format!("Insert failed: {e}"))?;
             count += 1;
         }
 
@@ -495,7 +495,7 @@ impl Executor {
         let schema = {
             let cat = catalog.read();
             cat.get_table(table_name)
-                .ok_or_else(|| format!("Table not found: {}", table_name))?
+                .ok_or_else(|| format!("Table not found: {table_name}"))?
                 .clone()
         };
         let col_names: Vec<String> = schema.columns.iter().map(|c| c.name.clone()).collect();
@@ -518,7 +518,7 @@ impl Executor {
             let encoded = encode_row(&col_names, &values);
 
             db.put(key.into_bytes(), encoded)
-                .map_err(|e| format!("Update failed: {}", e))?;
+                .map_err(|e| format!("Update failed: {e}"))?;
             count += 1;
         }
 
@@ -540,7 +540,7 @@ impl Executor {
         let schema = {
             let cat = catalog.read();
             cat.get_table(table_name)
-                .ok_or_else(|| format!("Table not found: {}", table_name))?
+                .ok_or_else(|| format!("Table not found: {table_name}"))?
                 .clone()
         };
         let pk_col = &schema.columns[0].name;
@@ -550,7 +550,7 @@ impl Executor {
             let pk_val = row.get_column(pk_col).unwrap_or(Value::Null);
             let key = format!("{}/{}", table_name, pk_value_to_string(&pk_val));
             db.delete(key.into_bytes())
-                .map_err(|e| format!("Delete failed: {}", e))?;
+                .map_err(|e| format!("Delete failed: {e}"))?;
             count += 1;
         }
 
@@ -575,7 +575,7 @@ impl Executor {
                 if if_not_exists {
                     return Ok(vec![]);
                 }
-                return Err(format!("Table already exists: {}", table_name));
+                return Err(format!("Table already exists: {table_name}"));
             }
         }
 
@@ -587,7 +587,7 @@ impl Executor {
         let schema = builder.build();
 
         db.create_table(schema)
-            .map_err(|e| format!("Create table failed: {}", e))?;
+            .map_err(|e| format!("Create table failed: {e}"))?;
 
         Ok(vec![Row::new_with_values(vec![(
             "result".into(),
@@ -607,7 +607,7 @@ impl Executor {
                 if if_exists {
                     Ok(vec![])
                 } else {
-                    Err(format!("Drop table failed: {}", e))
+                    Err(format!("Drop table failed: {e}"))
                 }
             }
         }
@@ -739,7 +739,7 @@ impl Executor {
                 }
                 other => {
                     let val = self.eval_expr(other, &row).unwrap_or(Value::Null);
-                    fields.push((format!("{}", other), val));
+                    fields.push((format!("{other}"), val));
                 }
             }
         }
@@ -773,7 +773,7 @@ impl Row {
         let pairs: Vec<(String, Value)> = fields
             .into_iter()
             .enumerate()
-            .map(|(i, v)| (format!("col{}", i), v))
+            .map(|(i, v)| (format!("col{i}"), v))
             .collect();
         Self::new_with_values(pairs)
     }
@@ -841,10 +841,10 @@ impl Table {
 
 fn pk_value_to_string(val: &Value) -> String {
     match val {
-        Value::Int(i) => format!("{:020}", i),
+        Value::Int(i) => format!("{i:020}"),
         Value::String(s) => s.clone(),
-        Value::Float(f) => format!("{}", f),
-        Value::Bool(b) => format!("{}", b),
+        Value::Float(f) => format!("{f}"),
+        Value::Bool(b) => format!("{b}"),
         Value::Bytes(b) => hex::encode(b),
         Value::Null => "NULL".to_string(),
     }
@@ -852,7 +852,7 @@ fn pk_value_to_string(val: &Value) -> String {
 
 mod hex {
     pub fn encode(data: &[u8]) -> String {
-        data.iter().map(|b| format!("{:02x}", b)).collect()
+        data.iter().map(|b| format!("{b:02x}")).collect()
     }
 }
 
@@ -984,7 +984,7 @@ fn decode_row(
                 offset += len;
                 Value::Bytes(b)
             }
-            _ => return Err(format!("Unknown value type: {}", type_byte)),
+            _ => return Err(format!("Unknown value type: {type_byte}")),
         };
 
         columns.push((name, val));
@@ -1004,6 +1004,6 @@ fn parse_data_type(s: &str) -> Result<middb_core::DataType, String> {
             Ok(middb_core::DataType::String)
         }
         "FLOAT" | "DOUBLE" | "REAL" | "FLOAT64" => Ok(middb_core::DataType::String),
-        _ => Err(format!("Unknown data type: {}", s)),
+        _ => Err(format!("Unknown data type: {s}")),
     }
 }

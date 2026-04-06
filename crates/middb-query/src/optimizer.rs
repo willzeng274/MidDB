@@ -474,7 +474,7 @@ mod tests {
             PhysicalPlan::HashJoin { join_type, .. } => {
                 assert_eq!(join_type, JoinType::Inner);
             }
-            _ => panic!("Expected HashJoin, got {:?}", physical),
+            _ => panic!("Expected HashJoin, got {physical:?}"),
         }
     }
 

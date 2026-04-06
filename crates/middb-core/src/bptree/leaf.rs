@@ -9,6 +9,12 @@ pub struct LeafNode<const FANOUT: usize, K, V> {
     next: RefCell<NodeWeakPtr<FANOUT, K, V>>,
 }
 
+impl<const FANOUT: usize, K: Ord + Clone, V: Clone> Default for LeafNode<FANOUT, K, V> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<const FANOUT: usize, K: Ord + Clone, V: Clone> LeafNode<FANOUT, K, V> {
     pub fn new() -> Self {
         LeafNode {

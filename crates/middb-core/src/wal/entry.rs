@@ -14,7 +14,7 @@ impl EntryType {
             1 => Ok(EntryType::Put),
             2 => Ok(EntryType::Delete),
             3 => Ok(EntryType::BTreePageWrite),
-            _ => Err(Error::Corruption(format!("Invalid entry type: {}", value))),
+            _ => Err(Error::Corruption(format!("Invalid entry type: {value}"))),
         }
     }
 }
@@ -98,8 +98,7 @@ impl WalEntry {
         let computed_crc = crc32(entry_data);
         if crc != computed_crc {
             return Err(Error::Corruption(format!(
-                "WAL entry CRC mismatch: expected {:#x}, got {:#x}",
-                crc, computed_crc
+                "WAL entry CRC mismatch: expected {crc:#x}, got {computed_crc:#x}"
             )));
         }
         

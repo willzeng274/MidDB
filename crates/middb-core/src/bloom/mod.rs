@@ -18,7 +18,7 @@ impl BloomFilter {
         let num_hash_funcs = ((bits_per_key as f64) * 0.69) as u32;
         let num_hash_funcs = num_hash_funcs.clamp(1, 30);
         
-        let num_bytes = (num_bits + 7) / 8;
+        let num_bytes = num_bits.div_ceil(8);
         
         assert!(num_bytes <= 1024 * 1024, "Bloom filter too large");
         
@@ -197,13 +197,13 @@ mod tests {
         
         // Insert keys
         for i in 0..num_keys {
-            let key = format!("key{:06}", i);
+            let key = format!("key{i:06}");
             filter.insert(key.as_bytes());
         }
         
         // Check inserted keys (should all be present)
         for i in 0..num_keys {
-            let key = format!("key{:06}", i);
+            let key = format!("key{i:06}");
             assert!(filter.may_contain(key.as_bytes()));
         }
         
@@ -212,7 +212,7 @@ mod tests {
         let mut false_positives = 0;
         
         for i in num_keys..num_keys + num_checks {
-            let key = format!("key{:06}", i);
+            let key = format!("key{i:06}");
             if filter.may_contain(key.as_bytes()) {
                 false_positives += 1;
             }
@@ -222,7 +222,7 @@ mod tests {
         
         // With 10 bits per key, we expect ~1% false positive rate
         // Allow some variance: check that it's less than 2%
-        assert!(fp_rate < 0.02, "False positive rate too high: {}", fp_rate);
+        assert!(fp_rate < 0.02, "False positive rate too high: {fp_rate}");
     }
     
     #[test]

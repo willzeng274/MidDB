@@ -66,7 +66,6 @@ impl SSTableReader {
             BloomFilter::from_bytes_with_meta(&bloom_data)
         };
 
-        // Pre-cache the index block
         let cached_index = {
             let mut data = vec![0u8; footer.index_handle.size as usize];
             #[cfg(unix)]
@@ -101,7 +100,6 @@ impl SSTableReader {
             }
         }
 
-        // Use cached index block
         let index_block = if let Some(ref cached) = self.cached_index {
             (**cached).clone()
         } else {
@@ -134,7 +132,6 @@ impl SSTableReader {
     }
 
     fn read_block(&self, handle: &BlockHandle) -> Result<Block> {
-        // Check cache first
         if let Some(ref cache) = self.cache {
             if let Some(cached_block) = cache.get(self.file_id, handle.offset) {
                 return Ok((*cached_block).clone());
@@ -143,7 +140,6 @@ impl SSTableReader {
 
         let block = self.read_block_raw(handle)?;
 
-        // Insert into cache
         if let Some(ref cache) = self.cache {
             cache.insert(self.file_id, handle.offset, block.clone());
         }
@@ -274,7 +270,7 @@ impl SSTableIterator {
         data_iter.seek(target);
 
         self.data_iter = Some(data_iter);
-        self.valid = self.data_iter.as_ref().map_or(false, |i| i.valid());
+        self.valid = self.data_iter.as_ref().is_some_and(|i| i.valid());
 
         Ok(())
     }
@@ -346,8 +342,8 @@ mod tests {
 
         let mut writer = SSTableWriter::create(path, 4096).unwrap();
         for i in 0..10 {
-            let key = format!("key{:03}", i);
-            let value = format!("value{}", i);
+            let key = format!("key{i:03}");
+            let value = format!("value{i}");
             writer.add(key.as_bytes(), value.as_bytes()).unwrap();
         }
         writer.finish(1, 0).unwrap();
@@ -360,8 +356,8 @@ mod tests {
             let key = iter.key().unwrap();
             let value = iter.value().unwrap();
 
-            let expected_key = format!("key{:03}", count);
-            let expected_value = format!("value{}", count);
+            let expected_key = format!("key{count:03}");
+            let expected_value = format!("value{count}");
 
             assert_eq!(key, expected_key.as_bytes());
             assert_eq!(value, expected_value.as_bytes());

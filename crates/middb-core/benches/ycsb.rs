@@ -6,7 +6,8 @@ use tempfile::TempDir;
 
 fn make_db() -> (Database, TempDir) {
     let dir = TempDir::new().unwrap();
-    let config = Config::new(dir.path());
+    let mut config = Config::new(dir.path());
+    config.sync_writes = false;
     let db = Database::open(config).unwrap();
     (db, dir)
 }
@@ -27,7 +28,7 @@ fn run_workload(
 
     // Pre-populate
     for i in 0..10000 {
-        let key = format!("user_{:012}", i).into_bytes();
+        let key = format!("user_{i:012}").into_bytes();
         db.put(key, vec![0x42u8; 100]).unwrap();
     }
 
